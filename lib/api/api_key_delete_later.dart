@@ -1,0 +1,1 @@
+const String openAIApiKey = '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';
