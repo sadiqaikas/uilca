@@ -610,64 +610,6 @@ Future<void> _analyzeProcess() async {
 }
 
 
-
-
-
-
-
-
-
-
-
-  // working code below
-// Future<void> _analyzeProcess() async {
-//     final prompt = widget.textController.text.trim();
-//     if (prompt.isEmpty) {
-//       ScaffoldMessenger.of(context).showSnackBar(
-//         const SnackBar(content: Text('Please enter a description.')),
-//       );
-//       return;
-//     }
-
-//     // // Show spinner while dialog is preparing
-//     // showDialog(
-//     //   context: context,
-//     //   barrierDismissible: false,
-//     //   builder: (_) => const AdvancedLectureProgressDialog(),
-//     // );
-
-//     // 1) Pop‐up streaming logs dialog
-// final Map<String, dynamic>? result= await showDialog(
-//   context: context,
-//   barrierDismissible: false,
-//   builder: (_) => StreamLogsDialog(prompt: prompt),
-// );
-
-// if (result == null) {
-//   ScaffoldMessenger.of(context).showSnackBar(
-//      const SnackBar(content: Text('LCA failed or was cancelled.')));
-//   return;
-// }
-// debugPrint('▶️ Navigating with lcaResult keys: ${result.keys}');
-
-// if (!result.containsKey('processes')) {
-//   ScaffoldMessenger.of(context).showSnackBar(
-//     const SnackBar(content: Text('Unexpected pipeline result — no processes found.')),
-//   );
-//   return;
-// }
-
-// // // 👉 navigate
-// Navigator.push(
-//   context,
-//   MaterialPageRoute(builder: (_) => ProcessDiagramPage(lcaResult: result)),
-// );
-
-
-
-
-//   }
-
   @override
   Widget build(BuildContext context) {
     return Padding(

@@ -1,6 +1,7 @@
-import 'package:earlylca/homescreen/home_screen.dart';
-import 'package:earlylca/landing.dart';
+
 import 'package:flutter/material.dart';
+ 
+import 'zzzz/home.dart';
 
 
 void main() {
@@ -18,11 +19,10 @@ class MyApp extends StatelessWidget {
         primarySwatch: Colors.blue,
         scaffoldBackgroundColor: Colors.white,
       ),
-      home: const LandingPage(),
+      home:  LCACanvasPage(),
     );
   }
 }
-
 
 // // lib/main.dart
 
