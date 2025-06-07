@@ -5797,6 +5797,7 @@ import 'package:http/http.dart' as http;
 import '../api/api_key_delete_later.dart';
 import 'home.dart';               // ProcessNode, FlowValue, ProcessNodeWidget, UndirectedConnectionPainter, etc.
 import 'lca_functions.dart';      // oneAtATimeSensitivity, fullSystemUncertainty, simplexLatticeDesign
+import 'results.dart';
 import 'scenario_merger.dart';    // mergeScenarios
 
 const String openaiApiKey = openAIApiKey;
@@ -6526,6 +6527,127 @@ If no edits are required (true baseline), return:
     }
   }
 
+
+// Future<Map<String, dynamic>> runLCAForAllScenarios() async {
+//   final Map<String, dynamic> allResults = {};
+//   print("🔔 [Flutter] Starting runLCAForAllScenarios. _mergedScenarios = $_mergedScenarios");
+
+//   if (_mergedScenarios == null || _mergedScenarios!.isEmpty) {
+//     print("❌ [Flutter] No merged scenarios to run.");
+//     return allResults;
+//   }
+
+//   for (final entry in _mergedScenarios!.entries) {
+//     final scenarioName = entry.key;
+//     final model = entry.value['model'];
+
+//     final uri = Uri.parse('http://localhost:8000/run_lca_all');
+//     final bodyMap = {
+//       'scenarios': {
+//         scenarioName: {'model': model},
+//       },
+//     };
+//     final body = jsonEncode(bodyMap);
+
+//     // 🔔 Debug before request
+//     print("🔔 [Flutter] POSTing to $uri");
+//     print("🔔 [Flutter] Request body for '$scenarioName': $body");
+
+//     try {
+//       final response = await http.post(
+//         uri,
+//         headers: {'Content-Type': 'application/json'},
+//         body: body,
+//       );
+
+//       // 🔔 Debug after response
+//       print("🔔 [Flutter] Response for '$scenarioName': ${response.statusCode}");
+//       print("🔔 [Flutter] Response body for '$scenarioName': ${response.body}");
+
+//       if (response.statusCode == 200) {
+//         final data = jsonDecode(response.body) as Map<String, dynamic>;
+//         allResults[scenarioName] = {
+//           'success': true,
+//           'result': data[scenarioName],
+//         };
+//       } else {
+//         allResults[scenarioName] = {
+//           'success': false,
+//           'error': 'HTTP ${response.statusCode}: ${response.reasonPhrase}',
+//         };
+//       }
+//     } catch (e, stack) {
+//       print("❌ [Flutter] Exception during LCA for '$scenarioName': $e");
+//       print(stack);
+//       allResults[scenarioName] = {
+//         'success': false,
+//         'error': e.toString(),
+//       };
+//     }
+//   }
+
+//   print("🔔 [Flutter] All results gathered: $allResults");
+//   return allResults;
+// }
+Future<Map<String, dynamic>> runLCAForAllScenarios() async {
+  final Map<String, dynamic> allResults = {};
+  print("🔔 [Flutter] Starting runLCAForAllScenarios. _mergedScenarios = $_mergedScenarios");
+
+  if (_mergedScenarios == null || _mergedScenarios!.isEmpty) {
+    print("❌ [Flutter] No merged scenarios to run.");
+    return allResults;
+  }
+
+  for (final entry in _mergedScenarios!.entries) {
+    final scenarioName = entry.key;
+    final model = entry.value['model'];
+
+    final uri = Uri.parse('http://localhost:8000/run_lca_all');
+    final bodyMap = {
+      'scenarios': {
+        scenarioName: {'model': model},
+      },
+    };
+    final body = jsonEncode(bodyMap);
+
+    print("🔔 [Flutter] POSTing to $uri");
+    print("🔔 [Flutter] Request body for '$scenarioName': $body");
+
+    try {
+      final response = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: body,
+      );
+
+      print("🔔 [Flutter] Response for '$scenarioName': ${response.statusCode}");
+      print("🔔 [Flutter] Response body for '$scenarioName': ${response.body}");
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        // <<< HERE we take data[scenarioName] *as-is*, because it already has { success, result }
+        allResults[scenarioName] = data[scenarioName];
+      } else {
+        allResults[scenarioName] = {
+          'success': false,
+          'error': 'HTTP ${response.statusCode}: ${response.reasonPhrase}',
+        };
+      }
+    } catch (e, stack) {
+      print("❌ [Flutter] Exception during LCA for '$scenarioName': $e");
+      print(stack);
+      allResults[scenarioName] = {
+        'success': false,
+        'error': e.toString(),
+      };
+    }
+  }
+
+  print("🔔 [Flutter] All results gathered: $allResults");
+  return allResults;
+}
+
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -6608,8 +6730,40 @@ If no edits are required (true baseline), return:
 
                         // Run LCA button (placeholder)
                         ElevatedButton.icon(
-                          onPressed: () {
-                            // TODO: implement Run LCA logic (e.g. export to Brightway2, run, and show results)
+                          onPressed: () async{
+//                                 // Show a SnackBar to indicate the process has started
+//     ScaffoldMessenger.of(context).showSnackBar(
+//       SnackBar(content: Text('Running LCA for all scenarios...')),
+//     );   
+                             
+//                               // Here you would implement the actual LCA logic.
+//                               // For now, we just print a message to the console.
+//                               print("Running LCA for all scenarios...");
+// setState(() => _isLoading = true);
+//     final results = await runLCAForAllScenarios();
+//     setState(() => _isLoading = false);
+
+//     // Navigate to the ResultsPage, passing the map:
+//     Navigator.of(context).push(
+//       MaterialPageRoute(
+//         builder: (_) => ResultsPage(results: results),
+//       ),
+//     );
+setState(() => _isLoading = true);
+    try {
+      final results = await runLCAForAllScenarios();
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => ResultsPage(results: results)),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('LCA error: $e')),
+      );
+    } finally {
+      setState(() => _isLoading = false);
+    }
+
+
                           },
                           icon: Icon(Icons.play_arrow),
                           label: Text('Run LCA'),
@@ -6715,8 +6869,8 @@ class ScenarioGraphView extends StatelessWidget {
             if (bottomEdge > maxY) maxY = bottomEdge;
           }
           // Add padding around the canvas
-          final double canvasWidth = maxX + 20;
-          final double canvasHeight = maxY + 20;
+          final double canvasWidth = maxX + 80;
+          final double canvasHeight = maxY + 80;
 
           return Padding(
             padding: const EdgeInsets.all(8.0),
