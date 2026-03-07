@@ -57,3 +57,6 @@ One-click launcher scripts are included in `python backend/`:
 
 - `start_backend.command` (macOS)
 - `start_backend.bat` (Windows)
+
+- 
+<img width="891" height="154" alt="image" src="https://github.com/user-attachments/assets/23a04f6d-c4bc-4990-95d5-eb2a639afb98" />
