@@ -1,0 +1,10 @@
+-r requirements-base.txt
+
+# Brightway backend
+bw2data==3.6.6
+bw2calc==1.8.2
+bw2io==0.8.12
+numpy==1.26.4
+scipy==1.15.3
+pandas==2.3.2
+openpyxl==3.1.5

@@ -1,0 +1,2 @@
+# Utility scripts (CSV_converter.py, ELCD_converter.py)
+rapidfuzz==3.13.0

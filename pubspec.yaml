@@ -46,6 +46,9 @@ dependencies:
   provider: ^6.1.5
   youtube_player_flutter: ^8.0.0
   path_provider: ^2.1.5
+  pdf: ^3.11.3
+  printing: ^5.14.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -74,7 +77,8 @@ flutter:
       - assets/logo1.png
       - assets/cad.png
       - assets/text.png
-
+      - assets/biosphere3_flows.json
+      - basemodel/base model.json
   #   - images/a_dot_ham.jpeg
 
   # An image asset can refer to one or more resolution-specific "variants", see

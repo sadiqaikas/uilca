@@ -1,0 +1,5 @@
+-r requirements-base.txt
+
+# openLCA IPC backend
+olca-ipc==2.4.0
+olca_schema==2.4.0

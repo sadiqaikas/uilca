@@ -1,4 +1,0 @@
-enum ChartViewMode {
-  impact,
-  dataSource,
-}

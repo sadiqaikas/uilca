@@ -41,3 +41,22 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Python / backend
+venv/
+__pycache__/
+*.pyo
+*.pyd
+.python-version
+.pytest_cache/
+.mypy_cache/
+
+# Local environment / secrets
+.env
+.env.*
+*.pem
+*.key
+*.crt
+
+# Firebase local cache artifacts
+.firebase/*.cache

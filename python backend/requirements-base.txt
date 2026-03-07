@@ -1,0 +1,6 @@
+# Tested with Python 3.12
+
+# API backend
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+pydantic==2.11.5

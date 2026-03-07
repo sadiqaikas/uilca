@@ -1,0 +1,22 @@
+# Root requirements for backend runtime (tested with Python 3.12)
+
+# API backend
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+pydantic==2.11.5
+
+# Brightway backend
+bw2data==3.6.6
+bw2calc==1.8.2
+bw2io==0.8.12
+numpy==1.26.4
+scipy==1.15.3
+pandas==2.3.2
+openpyxl==3.1.5
+
+# openLCA IPC backend
+olca-ipc==2.4.0
+olca_schema==2.4.0
+
+# Utility scripts (CSV_converter.py, ELCD_converter.py)
+rapidfuzz==3.13.0

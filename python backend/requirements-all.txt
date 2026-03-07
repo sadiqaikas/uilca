@@ -1,0 +1,4 @@
+# Install everything needed for both backends + converter scripts
+-r requirements-brightway.txt
+-r requirements-openlca.txt
+-r requirements-converter.txt
