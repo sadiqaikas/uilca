@@ -21,7 +21,10 @@ User prerequisites:
 - Python 3.12+
 - Internet connection on first run (to download Python backend dependencies)
 
+-Ensure the OpenLCA IPC server is started for Openlca use (Tools → Developer Tools → IPC Server) <img width="468" height="29" alt="image" src="https://github.com/user-attachments/assets/749b2fc7-f111-4ced-a6c8-3fd06972f341" />
+
 Stop the local stack with `Ctrl+C` in the launcher terminal window.
+
 
 ## Build Frontend Once (Maintainer Step)
 
