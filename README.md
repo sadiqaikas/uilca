@@ -2,7 +2,7 @@
 
 A new Flutter project.
 
-## Local One-Click Run (No Firebase)
+## Local One-Click Run 
 
 Run the entire local stack (Flutter frontend + Brightway backend + OpenLCA backend):
 
