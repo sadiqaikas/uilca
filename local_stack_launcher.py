@@ -4,14 +4,13 @@
 Starts:
   - Brightway backend on 127.0.0.1:8000
   - OpenLCA IPC backend on 127.0.0.1:8001
-  - Flutter web frontend on 127.0.0.1:3000
+  - Static frontend from build/web on 127.0.0.1:3000
 """
 
 from __future__ import annotations
 
 import hashlib
 import os
-import shutil
 import signal
 import socket
 import subprocess
@@ -28,6 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 BACKEND_ROOT = REPO_ROOT / "python backend"
 BACKEND_VENV = BACKEND_ROOT / ".venv"
 BACKEND_REQ_ALL = BACKEND_ROOT / "requirements-all.txt"
+WEB_BUILD_DIR = REPO_ROOT / "build" / "web"
 
 BRIGHTWAY_DIR = BACKEND_ROOT / "brightway_backend"
 OPENLCA_DIR = BACKEND_ROOT / "openlca_backend"
@@ -112,18 +112,16 @@ def _ensure_backend_env() -> None:
     log("[setup] Backend dependencies installed.")
 
 
-def _ensure_flutter_available() -> str:
-    flutter = shutil.which("flutter")
-    if flutter is None:
-        raise RuntimeError(
-            "Flutter command not found in PATH. Install Flutter and ensure `flutter` is available."
-        )
-    return flutter
-
-
-def _ensure_flutter_deps(flutter_cmd: str) -> None:
-    log("[setup] Running flutter pub get...")
-    subprocess.run([flutter_cmd, "pub", "get"], cwd=str(REPO_ROOT), check=True)
+def _ensure_web_build_exists() -> None:
+    index_file = WEB_BUILD_DIR / "index.html"
+    if index_file.exists():
+        return
+    raise RuntimeError(
+        "Missing frontend build artifact at build/web/index.html.\n"
+        "Build it once on a machine with Flutter:\n"
+        "  flutter pub get\n"
+        "  flutter build web --release --pwa-strategy=none"
+    )
 
 
 def _stream_output(name: str, proc: subprocess.Popen[str]) -> None:
@@ -200,8 +198,7 @@ def main() -> int:
     try:
         _ensure_free_ports()
         _ensure_backend_env()
-        flutter_cmd = _ensure_flutter_available()
-        _ensure_flutter_deps(flutter_cmd)
+        _ensure_web_build_exists()
 
         py = _venv_python()
 
@@ -260,17 +257,14 @@ def main() -> int:
         processes["frontend"] = _start_process(
             name="frontend",
             cmd=[
-                flutter_cmd,
-                "run",
-                "-d",
-                "web-server",
-                "--web-hostname",
-                "127.0.0.1",
-                "--web-port",
+                sys.executable,
+                "-m",
+                "http.server",
                 str(FRONTEND_PORT),
-                "--dart-define=BRIGHTWAY_BACKEND_BASE_URL=http://127.0.0.1:8000",
-                "--dart-define=OPENLCA_BACKEND_BASE_URL=http://127.0.0.1:8001",
-                f"--dart-define=OPENLCA_IPC_URL={OPENLCA_IPC_URL}",
+                "--bind",
+                "127.0.0.1",
+                "--directory",
+                str(WEB_BUILD_DIR),
             ],
             cwd=REPO_ROOT,
         )

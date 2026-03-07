@@ -7,6 +7,7 @@ use the repo-root scripts:
 - `start_local_stack.bat` (Windows)
 
 The full-stack launcher installs dependencies automatically and requires internet on first run.
+It serves frontend files from `build/web`, so end users do not need Flutter installed.
 
 This project has two Python backends:
 

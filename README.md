@@ -14,15 +14,25 @@ This will:
 1. Create/install backend Python environment automatically.
 2. Start Brightway backend on `http://127.0.0.1:8000`.
 3. Start OpenLCA backend on `http://127.0.0.1:8001`.
-4. Start Flutter web frontend on `http://127.0.0.1:3000`.
+4. Serve prebuilt frontend (`build/web`) on `http://127.0.0.1:3000`.
 
-Prerequisites:
+User prerequisites:
 
 - Python 3.12+
-- Flutter SDK with `flutter` available in `PATH`
-- Internet connection on first run (to download Python/Flutter dependencies)
+- Internet connection on first run (to download Python backend dependencies)
 
 Stop the local stack with `Ctrl+C` in the launcher terminal window.
+
+## Build Frontend Once (Maintainer Step)
+
+Run this only when you change frontend code and want to refresh `build/web`:
+
+```bash
+flutter pub get
+flutter build web --release --pwa-strategy=none
+```
+
+After building, commit `build/web` so end users can run without Flutter.
 
 ## Getting Started
 
