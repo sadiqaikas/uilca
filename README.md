@@ -23,7 +23,8 @@ User prerequisites:
 
 -Ensure the OpenLCA IPC server is started for Openlca use (Tools → Developer Tools → IPC Server) 
 
-Stop the local stack with `Ctrl+C` in the launcher terminal window.
+https://greendelta.github.io/openLCA-ApiDoc/intro.html
+
 
 
 ## Build Frontend Once (Maintainer Step)
