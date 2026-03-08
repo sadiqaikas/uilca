@@ -418,7 +418,7 @@ class _CanvasStartPageState extends State<CanvasStartPage> {
                     ),
                     const SizedBox(height: 10),
                     const Text(
-                      'Create an empty canvas, import the paper base model, or import from OpenLCA.',
+                      'Create an empty canvas, import the paper base model(Brightway2 only), or import from OpenLCA.',
                       textAlign: TextAlign.center,
                       style: TextStyle(fontSize: 14, color: Colors.black54),
                     ),
@@ -432,7 +432,7 @@ class _CanvasStartPageState extends State<CanvasStartPage> {
                     OutlinedButton.icon(
                       onPressed: _isLoading ? null : _importPaperBaseModel,
                       icon: const Icon(Icons.description),
-                      label: const Text('Import Paper Base Model'),
+                      label: const Text('Import Paper Base Model(Brightway2 only)'),
                     ),
                     const SizedBox(height: 10),
                     OutlinedButton.icon(

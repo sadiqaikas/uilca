@@ -56094,7 +56094,7 @@ Ij(a,b,c,d){var s=null,r=A.aX(d,s,s,s,s,B.mW,s,s)
 r=A.a([A.no(s,s,c,s,r,A.ne(b?B.Wt:B.Wu,s,s,s))],t.D)
 if(b)r.push(new A.bc(B.cL,a,s))
 return A.ju(A.cj(r,B.ac,B.S,B.aa),s,s,B.e6,s,s)},
-M(a){var s,r,q,p,o=this,n=null,m=o.a.e,l=A.Ap(m.dT(),n,"  "),k=A.BN(n,n,n,n,n,B.b11),j=A.eL(!0,o.d,B.Xl,!0,B.j3,n,!1,n,n),i=m.a.length,h=m.b
+M(a){var s,r,q,p,o=this,n=null,m=o.a.e,l=A.Ap(m.dT(),n,"  "),k=A.BN(n,n,n,n,n,B.b12),j=A.eL(!0,o.d,B.Xl,!0,B.j3,n,!1,n,n),i=m.a.length,h=m.b
 h=h.gp(h)
 s=o.e
 h=o.Ij(A.aNG(l,B.rJ),s,new A.aBI(o),"Parameters ("+i+" global, "+h+" process-specific)")
@@ -56107,7 +56107,7 @@ r=o.a.d
 q=r.length
 i=o.r
 p=t.D
-return A.uK(k,n,new A.bc(B.jN,A.cj(A.a([B.b12,B.cX,A.dm(A.q5(A.cj(A.a([j,B.hf,h,s,o.Ij(A.aNG(A.Ap(r,n,"  "),B.rJ),i,new A.aBL(o),"Flows ("+q+")")],p),B.ac,B.S,B.aa),n,B.ax,n,n,B.aX),1),A.cO(A.x3(B.Xa,B.b0l,o.gaos(),n),n,1/0)],p),B.ac,B.S,B.aa),n),n)}}
+return A.uK(k,n,new A.bc(B.jN,A.cj(A.a([B.b13,B.cX,A.dm(A.q5(A.cj(A.a([j,B.hf,h,s,o.Ij(A.aNG(A.Ap(r,n,"  "),B.rJ),i,new A.aBL(o),"Flows ("+q+")")],p),B.ac,B.S,B.aa),n,B.ax,n,n,B.aX),1),A.cO(A.x3(B.Xa,B.b0m,o.gaos(),n),n,1/0)],p),B.ac,B.S,B.aa),n),n)}}
 A.aBD.prototype={
 $1(a){return a.dT()},
 $S:62}
@@ -56144,7 +56144,7 @@ return s.r=!s.r},
 $S:0}
 A.aL2.prototype={
 $1(a){var s=this,r=null,q=s.b,p=A.eL(!0,q,B.Xk,!0,r,1,!1,r,r),o=s.c
-return A.oE(A.a([A.jZ(B.dD,new A.aL0(o),r),A.x2(!1,B.mX,r,r,B.cl,r,r,r,r,new A.aL1(s.a,q,s.d,o),r,r)],t.D),p,B.b0k)},
+return A.oE(A.a([A.jZ(B.dD,new A.aL0(o),r),A.x2(!1,B.mX,r,r,B.cl,r,r,r,r,new A.aL1(s.a,q,s.d,o),r,r)],t.D),p,B.b0l)},
 $S:140}
 A.aL0.prototype={
 $0(){A.bW(this.a,!1).e0(null)
@@ -56694,7 +56694,7 @@ h.push(new A.kO(a2,-10,-10,a2,a2,a2,new A.xV(A.d0(a2,a2,a2,A.ne(a0,j.t(0,f)?B.M:
 r=A.ht(10)
 r=A.a([a6,A.FZ(a2,A.ju(A.cj(A.a([A.d0(a2,a2,a2,B.X6,a2,a1.gava(),a2,a2,a2,"Zoom in"),A.aX(""+B.m.av(a1.z*100)+"%",a2,a2,a2,a2,B.f5,a2,a2),A.d0(a2,a2,a2,B.WU,a2,a1.gavc(),a2,a2,a2,"Zoom out"),A.d0(a2,a2,a2,B.WO,a2,a1.gavf(),a2,a2,a2,"Reset zoom"),A.d0(a2,a2,a2,B.X2,a2,g,a2,a2,a2,a3)],c),B.ac,B.S,B.bn),B.ut,4,a2,new A.dd(r,B.a_),a2),a2,a2,a2,12,12,a2)],c)
 if(a1.ay)r.push(A.FZ(a2,A.ju(new A.bc(B.V0,A.aX(s==null?"Upstream explorer":"Final: "+s.b+"  |  showing "+a4.length+"/"+a1.d.length,a2,a2,a2,a2,B.aZ_,a2,a2),a2),B.ut,3,a2,a2,a2),a2,a2,12,a2,12,a2))
-return A.uK(q,a2,A.wO(A.tE(B.d6,A.jC(B.dn,A.jX(B.ct,r,B.Q,B.ce,a2),B.ax,!1,a1.f,a2,a2,a2,a2,a2,a2,a2,a2,a2,a2,a1.gaoE(),a1.gaoG(),a1.gaoI(),a2,a2,a2,a2,a2,a2,a2,a2,a2,a2,a2,!1,B.cD),a2,a2,a2,a2,a1.gaov(),a2),B.PC,B.eA),A.cj(A.a([A.aS9(a2,"add",B.w0,B.b1d,a1.gadA()),B.hf,A.aS9(B.Sg,"export",B.vY,B.b0i,a1.gahV())],c),B.ac,B.iF,B.aa))}}
+return A.uK(q,a2,A.wO(A.tE(B.d6,A.jC(B.dn,A.jX(B.ct,r,B.Q,B.ce,a2),B.ax,!1,a1.f,a2,a2,a2,a2,a2,a2,a2,a2,a2,a2,a1.gaoE(),a1.gaoG(),a1.gaoI(),a2,a2,a2,a2,a2,a2,a2,a2,a2,a2,a2,!1,B.cD),a2,a2,a2,a2,a1.gaov(),a2),B.PC,B.eA),A.cj(A.a([A.aS9(a2,"add",B.w0,B.b1d,a1.gadA()),B.hf,A.aS9(B.Sg,"export",B.vY,B.b0j,a1.gahV())],c),B.ac,B.iF,B.aa))}}
 A.aBB.prototype={
 $1(a){return A.e6(a,t.N,t.z)},
 $S:61}
@@ -56906,7 +56906,7 @@ m=A.v(new A.ax(m,new A.aAT(n),s),!0,s.i("k.E"))}o=A.eL(!0,p,B.Xp,!0,p,1,!1,new A
 s=m.length
 r=t.D
 s=A.cO(A.cj(A.a([o,B.f4,A.dm(s===0?B.RA:A.aN_(new A.aAV(q.b,m,q.d),s,new A.aAW()),1)],r),B.ac,B.S,B.aa),420,460)
-return A.oE(A.a([A.jZ(B.dD,new A.aAX(q.d),p)],r),s,B.b02)},
+return A.oE(A.a([A.jZ(B.dD,new A.aAX(q.d),p)],r),s,B.b03)},
 $S:69}
 A.aAT.prototype={
 $1(a){var s=this.a
@@ -56966,7 +56966,7 @@ s.Q=s.m2(s.Q.Z(0,this.b.a))},
 $S:0}
 A.aAL.prototype={
 $1(a){var s=null,r=this.a,q=this.b
-return A.uI(!0,A.cj(A.a([A.no(s,B.WP,new A.aAH(r,a,q),s,B.b08,s),A.no(s,B.WR,new A.aAI(r,a,q),B.b0s,B.b0r,s),A.no(s,B.WZ,new A.aAJ(r,a,q),s,B.b0u,s),A.no(s,B.X8,new A.aAK(r,a,q),s,B.b0a,s)],t.D),B.ac,B.S,B.bn),B.aT,!0)},
+return A.uI(!0,A.cj(A.a([A.no(s,B.WP,new A.aAH(r,a,q),s,B.b09,s),A.no(s,B.WR,new A.aAI(r,a,q),B.b0t,B.b0s,s),A.no(s,B.WZ,new A.aAJ(r,a,q),s,B.b0v,s),A.no(s,B.X8,new A.aAK(r,a,q),s,B.b0b,s)],t.D),B.ac,B.S,B.bn),B.aT,!0)},
 $S:652}
 A.aAH.prototype={
 $0(){var s=0,r=A.X(t.H),q=this
@@ -57010,9 +57010,9 @@ $1(a){return new A.l0(new A.aBi(this.a,this.b,this.c),null)},
 $S:78}
 A.aBi.prototype={
 $2(a,b){var s,r=null,q=this.a,p=q.a,o=t.D
-p=A.cj(A.a([B.b0z,new A.Ho(p,new A.aBf(q,b),0.6,2.4,18,B.m.a0(p,2)+"\xd7",r)],o),B.ac,B.S,B.bn)
+p=A.cj(A.a([B.b0B,new A.Ho(p,new A.aBf(q,b),0.6,2.4,18,B.m.a0(p,2)+"\xd7",r)],o),B.ac,B.S,B.bn)
 s=this.b
-return A.oE(A.a([A.jZ(B.dD,new A.aBg(s),r),A.x2(!1,B.b0B,r,r,B.cl,r,r,r,r,new A.aBh(q,s,this.c),r,r)],o),p,B.b10)},
+return A.oE(A.a([A.jZ(B.dD,new A.aBg(s),r),A.x2(!1,B.b0D,r,r,B.cl,r,r,r,r,new A.aBh(q,s,this.c),r,r)],o),p,B.b11)},
 $S:69}
 A.aBf.prototype={
 $1(a){return this.b.$1(new A.aBe(this.a,a))},
@@ -57202,7 +57202,7 @@ s=this.a
 r=s.ai1(n)
 q=A.L(r)
 p=q.i("dV<1,nn>")
-return A.cj(A.a([B.b0K,B.cX,A.eL(!0,s.c,B.Xj,!0,o,1,!1,new A.al2(a),o),B.cX,new A.lH(1,B.fu,A.aT9(A.v(new A.dV(new A.ax(r,new A.al3(s),q.i("ax<1>")),new A.al4(this.b),p),!0,p.i("k.E")),o,o,!0),o),B.cX,B.b18],t.D),B.ac,B.S,B.bn)},
+return A.cj(A.a([B.b0L,B.cX,A.eL(!0,s.c,B.Xj,!0,o,1,!1,new A.al2(a),o),B.cX,new A.lH(1,B.fu,A.aT9(A.v(new A.dV(new A.ax(r,new A.al3(s),q.i("ax<1>")),new A.al4(this.b),p),!0,p.i("k.E")),o,o,!0),o),B.cX,B.b18],t.D),B.ac,B.S,B.bn)},
 $S:615}
 A.al2.prototype={
 $1(a){return this.a.ew()},
@@ -57772,7 +57772,7 @@ o=r.$ti.i("dV<1,c4>")
 n=A.v(new A.dV(r,new A.aE3(),o),!0,o.i("k.E"))
 if(n.length!==0)p.l(0,s,n)}return new A.j1(q,p)},
 M(a){var s=this,r=null,q=t.D
-return A.aMe(r,r,A.cO(A.cj(A.a([B.cX,B.b0X,B.cX,new A.CI(2,s.r,A.dm(A.cj(A.a([new A.HH(B.aKU,new A.aE8(s),r),A.dm(new A.HI(A.a([s.aeg(),s.aev()],q),B.aOw,r),1)],q),B.ac,B.S,B.aa),1),r),B.jH,new A.bc(B.jP,A.cV(A.a([A.jZ(B.dD,new A.aE9(a),r),B.dU,A.x3(B.WS,B.mX,new A.aEa(s,a),r)],q),B.ac,B.S,B.aa,r),r)],q),B.ac,B.S,B.aa),600,900),B.Q,r,B.vb,r,r,r)},
+return A.aMe(r,r,A.cO(A.cj(A.a([B.cX,B.b0Y,B.cX,new A.CI(2,s.r,A.dm(A.cj(A.a([new A.HH(B.aKU,new A.aE8(s),r),A.dm(new A.HI(A.a([s.aeg(),s.aev()],q),B.aOw,r),1)],q),B.ac,B.S,B.aa),1),r),B.jH,new A.bc(B.jP,A.cV(A.a([A.jZ(B.dD,new A.aE9(a),r),B.dU,A.x3(B.WS,B.mX,new A.aEa(s,a),r)],q),B.ac,B.S,B.aa,r),r)],q),B.ac,B.S,B.aa),600,900),B.Q,r,B.vb,r,r,r)},
 aeg(){var s=this,r=null,q=t.D,p=A.a([],q),o=s.x
 if(o!=null)p.push(new A.JL(o,r))
 p.push(new A.bc(B.jO,A.cV(A.a([A.x3(B.w_,B.No,new A.aDL(s),r),B.bF,A.y2(B.oZ,B.Nn,s.gaqU(),r),B.dU,new A.KO(r)],q),B.ac,B.S,B.aa,r),r))
@@ -57787,7 +57787,7 @@ if(n.length===0&&p.a.d.length!==0)n=B.l.gT(p.a.d).a
 s=p.a.d
 r=A.L(s).i("E<1,eD<f>>")
 q=t.D
-n=A.a([B.b0d,B.bF,A.wV(!1,A.v(new A.E(s,new A.aDU(),r),!0,r.i("a6.E")),new A.aDV(p),o,n,t.N),B.dU],q)
+n=A.a([B.b0e,B.bF,A.wV(!1,A.v(new A.E(s,new A.aDU(),r),!0,r.i("a6.E")),new A.aDV(p),o,n,t.N),B.dU],q)
 if(p.y!=null)n.push(B.b7)
 n=A.a([new A.bc(B.jO,A.cV(n,B.ac,B.S,B.aa,o),o)],q)
 s=p.y
@@ -58035,7 +58035,7 @@ o=A.dm(A.eL(!0,o,A.RQ(p,p,p,p,p,p,p,p,!0,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p
 s=q.e
 s===$&&A.b()
 r=t.D
-return A.cj(A.a([A.cV(A.a([o,B.bF,A.dm(A.eL(!0,s,A.RQ(p,p,p,p,p,p,p,p,!0,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,"number or formula, e.g. 1000 * efficiency",p,p,p,p,p,p,p,p,"Expression",p,p,p,p,p,p,p,p,q.ap6(),p,p,p,p),!0,p,1,!1,new A.aEl(q),p),3),B.bF,A.cO(A.cj(A.a([B.b0N,A.aX(q.a.x,p,p,p,p,B.mW,p,p)],r),B.bP,B.S,B.aa),p,120),B.bF,A.d0(p,p,p,B.X5,p,q.a.w,p,p,p,"Delete")],r),B.ac,B.S,B.aa,p)],r),B.ac,B.S,B.aa)},
+return A.cj(A.a([A.cV(A.a([o,B.bF,A.dm(A.eL(!0,s,A.RQ(p,p,p,p,p,p,p,p,!0,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,p,"number or formula, e.g. 1000 * efficiency",p,p,p,p,p,p,p,p,"Expression",p,p,p,p,p,p,p,p,q.ap6(),p,p,p,p),!0,p,1,!1,new A.aEl(q),p),3),B.bF,A.cO(A.cj(A.a([B.b0O,A.aX(q.a.x,p,p,p,p,B.mW,p,p)],r),B.bP,B.S,B.aa),p,120),B.bF,A.d0(p,p,p,B.X5,p,q.a.w,p,p,p,"Delete")],r),B.ac,B.S,B.aa,p)],r),B.ac,B.S,B.aa)},
 ap6(){var s=this.a.f
 if(s.length===0)return B.b7
 return new A.ym(new A.aEg(s),new A.aEh(this),"Insert outer parameter",B.X7,null,t.iX)},
@@ -58165,7 +58165,7 @@ m.push(B.dT)
 m.push(A.cV(A.a([B.Nq,B.dU,A.d0(q,q,q,B.fB,q,new A.aun(r),q,q,q,q)],n),B.ac,B.S,B.aa,q))
 B.l.L(m,A.kE(r.Q.length,new A.auo(r,o,p),l))
 m.push(B.dT)
-m.push(A.cV(A.a([B.b0C,B.dU,A.d0(q,q,q,B.fB,q,r.gadr(),q,q,q,"Add emission field")],n),B.ac,B.S,B.aa,q))
+m.push(A.cV(A.a([B.b0E,B.dU,A.d0(q,q,q,B.fB,q,r.gadr(),q,q,q,"Add emission field")],n),B.ac,B.S,B.aa,q))
 B.l.L(m,A.kE(r.cx.length,new A.aup(r),l))
 m.push(B.hf)
 m.push(A.cV(A.a([A.dm(A.eL(!0,r.go,B.Xq,!0,q,1,!1,q,new A.auq(r)),1),A.d0(q,q,q,B.WV,q,r.gapS(),q,q,q,"Search")],n),B.ac,B.S,B.aa,q))
@@ -58176,7 +58176,7 @@ m.push(A.cY(q,A.aTa(new A.aur(r),r.gJr().length,q),B.Q,q,B.Pw,new A.cR(q,q,l,s,q
 m.push(B.cX)
 l=r.dx
 B.l.L(m,new A.E(l,new A.aus(r),A.L(l).i("E<1,i>")))
-m.push(A.cV(A.a([A.jZ(B.dD,new A.aut(a),q),A.x2(!1,B.b0x,q,q,B.cl,q,q,q,q,r.gao3(),q,q)],n),B.ac,B.S,B.aa,q))
+m.push(A.cV(A.a([A.jZ(B.dD,new A.aut(a),q),A.x2(!1,B.b0y,q,q,B.cl,q,q,q,q,r.gao3(),q,q)],n),B.ac,B.S,B.aa,q))
 return A.uK(q,q,A.uI(!0,new A.bc(B.Vi,A.q5(A.cj(m,B.hN,B.S,B.aa),q,B.ax,q,q,B.aX),q),B.aT,!0),q)},
 ao4(){var s,r,q,p,o,n,m,l,k,j,i,h,g,f,e,d,c,b,a,a0,a1=this,a2=null,a3=B.p.U(a1.d.a.a)
 if(a3.length===0)return
@@ -59163,10 +59163,10 @@ s=m.r?new A.cR(n,n,A.lu(B.o2,2),n,n,n,B.aS):n
 r=t.D
 j=A.a([j.$0()],r)
 q=m.c
-if(q.length!==0){p=A.a([B.MJ,B.b0b],r)
+if(q.length!==0){p=A.a([B.MJ,B.b0c],r)
 B.l.L(p,new A.E(q,o.gUx(),A.L(q).i("E<1,i>")))
 B.l.L(j,p)}m=m.d
-if(m.length!==0){r=A.a([B.MJ,B.b0R],r)
+if(m.length!==0){r=A.a([B.MJ,B.b0S],r)
 B.l.L(r,new A.E(m,o.gUx(),A.L(m).i("E<1,i>")))
 B.l.L(j,r)}return A.ju(A.cY(n,A.jy(A.q5(A.cj(j,B.bP,B.S,B.aa),n,B.ax,n,n,B.aX),n,n,B.cs,!0,B.aYB,n,n,B.b2),B.Q,n,n,s,n,k.b,n,n,B.cL,n,n,k.a),B.uG,6,n,new A.dd(l,B.a_),B.uD)}}
 A.alR.prototype={
@@ -59370,8 +59370,8 @@ break
 case 6:case 1:return A.V(q,r)
 case 2:return A.U(o,r)}})
 return A.W($async$wD,r)},
-M(a){var s=this,r=null,q=s.d,p=A.x3(B.w0,B.b19,q?r:s.gap4(),r),o=A.y2(B.WQ,B.b0E,q?r:s.gamt(),r),n=t.D
-o=A.a([B.b1b,B.f4,B.b17,B.aUU,p,B.f4,o,B.f4,A.y2(B.X3,B.b0n,q?r:s.gams(),r)],n)
+M(a){var s=this,r=null,q=s.d,p=A.x3(B.w0,B.b19,q?r:s.gap4(),r),o=A.y2(B.WQ,B.b0A,q?r:s.gamt(),r),n=t.D
+o=A.a([B.b1b,B.f4,B.b01,B.aUU,p,B.f4,o,B.f4,A.y2(B.X3,B.b0o,q?r:s.gams(),r)],n)
 if(s.d)B.l.L(o,A.a([B.aUT,B.ui],n))
 return A.uK(r,r,A.cY(r,A.fr(new A.fs(B.Px,A.ju(new A.bc(B.Vd,A.cj(o,B.hN,B.S,B.bn),r),r,10,B.vb,r,r),r),r,r),B.Q,r,r,B.PD,r,r,r,r,r,r,r,r),r)}}
 A.aw6.prototype={
@@ -59391,7 +59391,7 @@ m=A.v(s,!0,s.$ti.i("k.E"))}o=A.eL(!0,p,B.w8,!0,p,1,!1,new A.awn(o,b),p)
 s=J.a1(m)
 r=t.D
 s=A.cO(A.cj(A.a([o,B.f4,A.dm(s.gW(m)?B.Rz:A.aN_(new A.awo(q.b,m,q.d,q.e),s.gp(m),new A.awp()),1)],r),B.ac,B.S,B.aa),460,620)
-return A.oE(A.a([A.jZ(B.dD,new A.awq(q.e),p)],r),s,B.b06)},
+return A.oE(A.a([A.jZ(B.dD,new A.awq(q.e),p)],r),s,B.b07)},
 $S:69}
 A.awm.prototype={
 $1(a){return B.p.t(this.a.atq(a),this.b)},
@@ -60347,17 +60347,17 @@ break
 case 7:case 1:return A.V(q,r)
 case 2:return A.U(o,r)}})
 return A.W($async$tK,r)},
-M(a){var s,r,q,p,o=this,n=null,m="(not selected)",l=o.w,k=A.BN(n,n,n,n,n,B.b0W)
+M(a){var s,r,q,p,o=this,n=null,m="(not selected)",l=o.w,k=A.BN(n,n,n,n,n,B.b0X)
 if(o.f)l=B.ui
 else if(l==null){l=t.D
-l=A.fr(A.cj(A.a([A.aX("OpenAI key: "+o.anu(o.r),n,n,n,n,B.aYC,n,n),B.hf,A.cV(A.a([A.x2(!1,B.b0e,n,n,B.cl,n,n,n,n,o.gWN(),n,n),B.aUQ,A.aN8(!1,B.b05,n,n,B.cl,n,n,o.gWQ(),n,n)],l),B.ac,B.S,B.bn,n)],l),B.ac,B.S,B.bn),n,n)}else{l=A.dm(new A.Mg("User prompt",A.aX(o.a.c,n,n,n,n,B.Nk,n,n),n),1)
+l=A.fr(A.cj(A.a([A.aX("OpenAI key: "+o.anu(o.r),n,n,n,n,B.aYC,n,n),B.hf,A.cV(A.a([A.x2(!1,B.b0f,n,n,B.cl,n,n,n,n,o.gWN(),n,n),B.aUQ,A.aN8(!1,B.b06,n,n,B.cl,n,n,o.gWQ(),n,n)],l),B.ac,B.S,B.bn,n)],l),B.ac,B.S,B.bn),n,n)}else{l=A.dm(new A.Mg("User prompt",A.aX(o.a.c,n,n,n,n,B.Nk,n,n),n),1)
 s=o.y
 r=t.D
 s=A.a([A.ju(new A.bc(B.jN,A.cV(A.a([l,B.aUR,new A.Mg("Functions called",A.aX(s.length===0?"none":B.l.by(s,", "),n,n,n,n,B.Nk,n,n),n)],r),B.bP,B.S,B.aa,n),n),n,n,n,n,n),B.dT,new A.Z6(o.x,n),B.dT],r)
 l=o.w
 if(l!=null&&l.a!==0){l.toString
-B.l.L(s,A.a([B.b0f,B.cX,A.cO(new A.Vu(l,n),420,n)],r))}s.push(B.dT)
-s.push(A.aO7(A.a([A.x3(B.vY,B.b0y,o.gaoA(),n),A.y2(B.oZ,B.b0F,o.gWN(),n),A.y2(B.X9,B.b09,o.gWQ(),n)],r),12,12))
+B.l.L(s,A.a([B.b0g,B.cX,A.cO(new A.Vu(l,n),420,n)],r))}s.push(B.dT)
+s.push(A.aO7(A.a([A.x3(B.vY,B.b0z,o.gaoA(),n),A.y2(B.oZ,B.b0G,o.gWN(),n),A.y2(B.X9,B.b0a,o.gWQ(),n)],r),12,12))
 l=o.d
 q=l==null
 if(!q||o.e!=null){l=o.q9(q?B.cC:l,m)
@@ -60374,9 +60374,9 @@ $1(a){return new A.l0(new A.aCj(this.a,this.b,this.c,a),null)},
 $S:78}
 A.aCj.prototype={
 $2(a,b){var s,r=this,q=null,p=r.c,o=r.a,n=o.a,m=t.D
-n=A.cO(A.cj(A.a([B.b0O,B.hf,A.eL(!1,p,A.RQ(q,B.da,q,q,q,q,q,q,!0,q,q,q,q,q,o.b,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,"API key",q,q,q,q,q,q,q,q,q,q,q,q,q),!1,q,1,n,q,q),B.cX,A.cV(A.a([A.aQY(new A.aCf(o,b),!1,!o.a),B.b0J],m),B.ac,B.S,B.aa,q)],m),B.bP,B.S,B.bn),q,560)
+n=A.cO(A.cj(A.a([B.b0P,B.hf,A.eL(!1,p,A.RQ(q,B.da,q,q,q,q,q,q,!0,q,q,q,q,q,o.b,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,q,"API key",q,q,q,q,q,q,q,q,q,q,q,q,q),!1,q,1,n,q,q),B.cX,A.cV(A.a([A.aQY(new A.aCf(o,b),!1,!o.a),B.b0K],m),B.ac,B.S,B.aa,q)],m),B.bP,B.S,B.bn),q,560)
 s=r.d
-return A.oE(A.a([A.jZ(B.dD,new A.aCg(s),q),A.aN8(!1,B.b0A,q,q,B.cl,q,q,new A.aCh(s),q,q),A.x2(!1,B.mX,q,q,B.cl,q,q,q,q,new A.aCi(o,r.b,p,b,s),q,q)],m),n,B.b1c)},
+return A.oE(A.a([A.jZ(B.dD,new A.aCg(s),q),A.aN8(!1,B.b0C,q,q,B.cl,q,q,new A.aCh(s),q,q),A.x2(!1,B.mX,q,q,B.cl,q,q,q,q,new A.aCi(o,r.b,p,b,s),q,q)],m),n,B.b1c)},
 $S:69}
 A.aCf.prototype={
 $1(a){this.b.$1(new A.aCe(this.a,a))},
@@ -60433,7 +60433,7 @@ $0(){return this.a.f=!1},
 $S:0}
 A.aCB.prototype={
 $1(a){var s=null
-return A.oE(A.a([A.jZ(B.dD,new A.aCy(a),s),A.aN8(!1,B.b0Z,s,s,B.cl,s,s,new A.aCz(a),s,s),A.x2(!1,B.b0U,s,s,B.cl,s,s,s,s,new A.aCA(a),s,s)],t.D),B.b0w,B.b0S)},
+return A.oE(A.a([A.jZ(B.dD,new A.aCy(a),s),A.aN8(!1,B.b1_,s,s,B.cl,s,s,new A.aCz(a),s,s),A.x2(!1,B.b0V,s,s,B.cl,s,s,s,s,new A.aCA(a),s,s)],t.D),B.b0x,B.b0T)},
 $S:140}
 A.aCy.prototype={
 $0(){return A.bW(this.a,!1).eX()},
@@ -60486,8 +60486,8 @@ if(o.length===0)continue
 q.push(p+o)}},
 $S:15}
 A.aCx.prototype={
-$1(a){var s=null,r=t.D,q=A.cO(A.cj(A.a([A.aX("Calculated "+this.a+" scenario(s). Choose what to do next.",s,s,s,s,s,s,s),B.dT,A.x3(B.vZ,B.b0v,new A.aCu(a),A.b34(s,s,s,s,s,s,s,s,s,s,s,B.MI,s,s,s,s,s,s,s)),B.f4,A.y2(B.X4,B.b14,new A.aCv(a),A.b54(s,s,s,s,s,s,s,s,s,s,s,B.MI,s,s,s,s,s,s,s,s))],r),B.hN,B.S,B.bn),s,520)
-return A.oE(A.a([A.jZ(B.b0T,new A.aCw(a),s)],r),q,B.b0D)},
+$1(a){var s=null,r=t.D,q=A.cO(A.cj(A.a([A.aX("Calculated "+this.a+" scenario(s). Choose what to do next.",s,s,s,s,s,s,s),B.dT,A.x3(B.vZ,B.b0w,new A.aCu(a),A.b34(s,s,s,s,s,s,s,s,s,s,s,B.MI,s,s,s,s,s,s,s)),B.f4,A.y2(B.X4,B.b15,new A.aCv(a),A.b54(s,s,s,s,s,s,s,s,s,s,s,B.MI,s,s,s,s,s,s,s,s))],r),B.hN,B.S,B.bn),s,520)
+return A.oE(A.a([A.jZ(B.b0U,new A.aCw(a),s)],r),q,B.b0F)},
 $S:140}
 A.aCu.prototype={
 $0(){return A.bW(this.a,!1).e0(B.Ol)},
@@ -60585,7 +60585,7 @@ M(a){var s,r=null,q=this.c
 if(q==null)return B.b7
 s=A.a([],t.yy)
 q.an(0,new A.awx(s))
-return A.cj(A.a([B.b0p,B.cX,A.q5(new A.PP(B.BJ,r,r,s,A.b26(B.BJ),r),r,B.ax,r,r,B.b8)],t.D),B.bP,B.S,B.aa)}}
+return A.cj(A.a([B.b0q,B.cX,A.q5(new A.PP(B.BJ,r,r,s,A.b26(B.BJ),r),r,B.ax,r,r,B.b8)],t.D),B.bP,B.S,B.aa)}}
 A.awx.prototype={
 $2(a,b){var s,r,q,p,o,n,m,l,k=null,j="process_id",i="new_value",h=J.a1(b)
 if(h.gW(b))this.a.push(B.Ug)
@@ -123489,22 +123489,22 @@ B.uh=new A.P0(0,"pixel")
 B.Rr=new A.P0(1,"viewport")
 B.Rv=new A.Ce(null)
 B.Rw=new A.wd(null,null,null,null,null,null,null)
-B.b0t=new A.aO("No impact categories to display.",null,null,null,null,null,null,null,null,null)
-B.Rx=new A.hv(B.b4,null,null,B.b0t,null)
+B.b0u=new A.aO("No impact categories to display.",null,null,null,null,null,null,null,null,null)
+B.Rx=new A.hv(B.b4,null,null,B.b0u,null)
 B.b63=new A.atG(0,"material")
 B.RP=new A.wh(4,null)
 B.ui=new A.hv(B.b4,null,null,B.RP,null)
-B.b0c=new A.aO("No graph data available",null,null,null,null,null,null,null,null,null)
-B.Ry=new A.hv(B.b4,null,null,B.b0c,null)
+B.b0d=new A.aO("No graph data available",null,null,null,null,null,null,null,null,null)
+B.Ry=new A.hv(B.b4,null,null,B.b0d,null)
 B.an=new A.w(2315255808)
 B.mV=new A.u(!0,B.an,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null)
-B.b0V=new A.aO("No product systems match your search.",null,B.mV,null,null,null,null,null,null,null)
-B.Rz=new A.hv(B.b4,null,null,B.b0V,null)
-B.b0M=new A.aO("No matching process",null,B.mV,null,null,null,null,null,null,null)
-B.RA=new A.hv(B.b4,null,null,B.b0M,null)
+B.b0W=new A.aO("No product systems match your search.",null,B.mV,null,null,null,null,null,null,null)
+B.Rz=new A.hv(B.b4,null,null,B.b0W,null)
+B.b0N=new A.aO("No matching process",null,B.mV,null,null,null,null,null,null,null)
+B.RA=new A.hv(B.b4,null,null,B.b0N,null)
 B.dC=new A.nW(2,"center")
-B.b0g=new A.aO("No impact categories were returned. Run LCA again with at least one successful scenario.",null,null,B.dC,null,null,null,null,null,null)
-B.RB=new A.hv(B.b4,null,null,B.b0g,null)
+B.b0h=new A.aO("No impact categories were returned. Run LCA again with at least one successful scenario.",null,null,B.dC,null,null,null,null,null,null)
+B.RB=new A.hv(B.b4,null,null,B.b0h,null)
 B.uj=new A.aaB(4,"luminance")
 B.ai=new A.d6(26,"cf")
 B.i=new A.d6(5,"mn")
@@ -123711,14 +123711,14 @@ B.e4=new A.wL(B.th,null,null,null,null,null,null,null)
 B.cw=new A.PN(0,"base")
 B.op=new A.PN(1,"elevated")
 B.U9=new A.abA(1,"latency")
-B.b1_=new A.aO("(empty)",null,null,null,null,null,null,null,null,null)
-B.Ua=new A.lA(B.b1_)
+B.b10=new A.aO("(empty)",null,null,null,null,null,null,null,null,null)
+B.Ua=new A.lA(B.b10)
 B.oV=new A.Rb(1,"italic")
 B.Nj=new A.u(!0,null,null,null,null,null,null,null,B.oV,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null)
-B.b0q=new A.aO("(no changes)",null,B.Nj,null,null,null,null,null,null,null)
-B.Ub=new A.lA(B.b0q)
-B.b0o=new A.aO("-",null,B.Nj,null,null,null,null,null,null,null)
-B.uU=new A.lA(B.b0o)
+B.b0r=new A.aO("(no changes)",null,B.Nj,null,null,null,null,null,null,null)
+B.Ub=new A.lA(B.b0r)
+B.b0p=new A.aO("-",null,B.Nj,null,null,null,null,null,null,null)
+B.uU=new A.lA(B.b0p)
 B.aKe=A.a(s([B.Ua,B.Ub,B.uU,B.uU]),t.sa)
 B.Ug=new A.rA(B.aKe)
 B.Uh=new A.CG(null,null,null,null,null,null,null,null,null,null,null,null,null,null)
@@ -124364,8 +124364,8 @@ B.aG9=A.a(s(["Target","Field","New Value"]),t.ee)
 B.um=new A.wh(2,null)
 B.aUW=new A.eI(14,14,B.um,null)
 B.bF=new A.eI(8,null,null,null)
-B.b0m=new A.aO("Loading biosphere list\u2026",null,null,null,null,null,null,null,null,null)
-B.aGb=A.a(s([B.aUW,B.bF,B.b0m]),t.D)
+B.b0n=new A.aO("Loading biosphere list\u2026",null,null,null,null,null,null,null,null,null)
+B.aGb=A.a(s([B.aUW,B.bF,B.b0n]),t.D)
 B.NN=new A.vi(0,"predictor")
 B.b3p=new A.vi(1,"crossColor")
 B.b3q=new A.vi(2,"subtractGreen")
@@ -124511,14 +124511,14 @@ B.dq=A.a(s([0,8,16,24,32,41,49,57,65,74,82,90,98,106,115,123,131,139,148,156,164
 B.Lh=new A.FU(0,"source")
 B.Li=new A.FU(1,"over")
 B.aHp=A.a(s([B.Lh,B.Li]),A.ab("q<FU>"))
-B.b0h=new A.aO("Scenario",null,null,null,null,null,null,null,null,null)
-B.Uf=new A.rz(B.b0h)
-B.b0G=new A.aO("Process/Flow ID",null,null,null,null,null,null,null,null,null)
-B.Uc=new A.rz(B.b0G)
-B.b0I=new A.aO("Field",null,null,null,null,null,null,null,null,null)
-B.Ue=new A.rz(B.b0I)
-B.b01=new A.aO("New value",null,null,null,null,null,null,null,null,null)
-B.Ud=new A.rz(B.b01)
+B.b0i=new A.aO("Scenario",null,null,null,null,null,null,null,null,null)
+B.Uf=new A.rz(B.b0i)
+B.b0H=new A.aO("Process/Flow ID",null,null,null,null,null,null,null,null,null)
+B.Uc=new A.rz(B.b0H)
+B.b0J=new A.aO("Field",null,null,null,null,null,null,null,null,null)
+B.Ue=new A.rz(B.b0J)
+B.b02=new A.aO("New value",null,null,null,null,null,null,null,null,null)
+B.Ud=new A.rz(B.b02)
 B.BJ=A.a(s([B.Uf,B.Uc,B.Ue,B.Ud]),A.ab("q<rz>"))
 B.is=A.a(s([0,1,3,7,15,31,63,127,255]),t.t)
 B.q0=A.a(s([0,128,192,224,240,248,252,254,255]),t.t)
@@ -129473,8 +129473,8 @@ B.aPF=new A.Fm(null)
 B.b5U=new A.Th(0,"start")
 B.aPG=new A.Th(1,"end")
 B.HA=new A.ajW(0,"max")
-B.b0Y=new A.aO("No biosphere flows found for that term.",null,null,null,null,null,null,null,null,null)
-B.aPH=new A.bc(B.oE,B.b0Y,null)
+B.b0Z=new A.aO("No biosphere flows found for that term.",null,null,null,null,null,null,null,null,null)
+B.aPH=new A.bc(B.oE,B.b0Z,null)
 B.qK=new A.Fp(0,"natural")
 B.aPI=new A.Fp(1,"landscape")
 B.aPJ=new A.Fp(2,"portrait")
@@ -129892,28 +129892,28 @@ B.aV3=new A.mb(3,"hide")
 B.b5X=new A.mb(4,"remove")
 B.MQ=new A.mb(5,"timeout")
 B.aV4=new A.z9(null,null,null,null,null,null,null,null,null,null,null,null,null,null)
-B.b0H=new A.aO(u.t,null,null,null,null,null,null,null,null,null)
-B.aV5=new A.fX(B.b0H,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
-B.b0j=new A.aO("OpenAI API key is required before generating scenarios.",null,null,null,null,null,null,null,null,null)
-B.aV6=new A.fX(B.b0j,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
-B.b0P=new A.aO("Project loaded from file",null,null,null,null,null,null,null,null,null)
-B.aV7=new A.fX(B.b0P,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
-B.b0Q=new A.aO("Process JSON loaded from file",null,null,null,null,null,null,null,null,null)
-B.aV8=new A.fX(B.b0Q,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
-B.b03=new A.aO("Please fix invalid flow entries before adding.",null,null,null,null,null,null,null,null,null)
-B.aV9=new A.fX(B.b03,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
-B.b04=new A.aO("Please fix invalid flow entries before saving.",null,null,null,null,null,null,null,null,null)
-B.aVa=new A.fX(B.b04,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
-B.b15=new A.aO("No LCIA methods were returned by OpenLCA IPC backend.",null,null,null,null,null,null,null,null,null)
-B.aVb=new A.fX(B.b15,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
-B.b16=new A.aO("Please describe the scenario first",null,null,null,null,null,null,null,null,null)
-B.aVc=new A.fX(B.b16,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
-B.b07=new A.aO("Selected LCIA method is missing an id.",null,null,null,null,null,null,null,null,null)
-B.aVd=new A.fX(B.b07,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
-B.b13=new A.aO("No product systems were returned by OpenLCA IPC backend.",null,null,null,null,null,null,null,null,null)
-B.MR=new A.fX(B.b13,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
-B.b0L=new A.aO("PDF exported as lca_results_report.pdf",null,null,null,null,null,null,null,null,null)
-B.aVe=new A.fX(B.b0L,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
+B.b0I=new A.aO(u.t,null,null,null,null,null,null,null,null,null)
+B.aV5=new A.fX(B.b0I,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
+B.b0k=new A.aO("OpenAI API key is required before generating scenarios.",null,null,null,null,null,null,null,null,null)
+B.aV6=new A.fX(B.b0k,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
+B.b0Q=new A.aO("Project loaded from file",null,null,null,null,null,null,null,null,null)
+B.aV7=new A.fX(B.b0Q,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
+B.b0R=new A.aO("Process JSON loaded from file",null,null,null,null,null,null,null,null,null)
+B.aV8=new A.fX(B.b0R,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
+B.b04=new A.aO("Please fix invalid flow entries before adding.",null,null,null,null,null,null,null,null,null)
+B.aV9=new A.fX(B.b04,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
+B.b05=new A.aO("Please fix invalid flow entries before saving.",null,null,null,null,null,null,null,null,null)
+B.aVa=new A.fX(B.b05,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
+B.b16=new A.aO("No LCIA methods were returned by OpenLCA IPC backend.",null,null,null,null,null,null,null,null,null)
+B.aVb=new A.fX(B.b16,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
+B.b17=new A.aO("Please describe the scenario first",null,null,null,null,null,null,null,null,null)
+B.aVc=new A.fX(B.b17,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
+B.b08=new A.aO("Selected LCIA method is missing an id.",null,null,null,null,null,null,null,null,null)
+B.aVd=new A.fX(B.b08,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
+B.b14=new A.aO("No product systems were returned by OpenLCA IPC backend.",null,null,null,null,null,null,null,null,null)
+B.MR=new A.fX(B.b14,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
+B.b0M=new A.aO("PDF exported as lca_results_report.pdf",null,null,null,null,null,null,null,null,null)
+B.aVe=new A.fX(B.b0M,null,null,null,null,null,null,null,null,null,null,null,null,B.b5,null,null,null,B.a5,null)
 B.MS=new A.Wg(0,"permissive")
 B.b5Y=new A.Wg(1,"normal")
 B.dU=new A.Wq(null)
@@ -130339,62 +130339,62 @@ B.aXQ=new A.u(!1,null,null,null,null,null,14,B.b1,null,0.1,null,B.a4,1.43,B.aj,n
 B.aZj=new A.u(!1,null,null,null,null,null,12,B.b1,null,0.5,null,B.a4,1.33,B.aj,null,null,null,null,null,null,null,"tall labelMedium 2021",null,null,null,null)
 B.aXo=new A.u(!1,null,null,null,null,null,11,B.b1,null,0.5,null,B.a4,1.45,B.aj,null,null,null,null,null,null,null,"tall labelSmall 2021",null,null,null,null)
 B.b00=new A.eM(B.aZA,B.aXE,B.aZM,B.aX_,B.b_t,B.aXq,B.aWM,B.aXr,B.aXK,B.aYn,B.aZ9,B.aXM,B.aXQ,B.aZj,B.aXo)
-B.b02=new A.aO("Find process",null,null,null,null,null,null,null,null,null)
-B.b05=new A.aO("Set API key",null,null,null,null,null,null,null,null,null)
-B.b06=new A.aO("Choose OpenLCA Product System",null,null,null,null,null,null,null,null,null)
-B.b08=new A.aO("Edit",null,null,null,null,null,null,null,null,null)
-B.b09=new A.aO("API key",null,null,null,null,null,null,null,null,null)
-B.b0a=new A.aO("Delete",null,null,null,null,null,null,null,null,null)
+B.aYv=new A.u(!0,B.an,null,null,null,null,14,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null)
+B.b01=new A.aO("Create an empty canvas, import the paper base model(Brightway2 only), or import from OpenLCA.",null,B.aYv,B.dC,null,null,null,null,null,null)
+B.b03=new A.aO("Find process",null,null,null,null,null,null,null,null,null)
+B.b06=new A.aO("Set API key",null,null,null,null,null,null,null,null,null)
+B.b07=new A.aO("Choose OpenLCA Product System",null,null,null,null,null,null,null,null,null)
+B.b09=new A.aO("Edit",null,null,null,null,null,null,null,null,null)
+B.b0a=new A.aO("API key",null,null,null,null,null,null,null,null,null)
+B.b0b=new A.aO("Delete",null,null,null,null,null,null,null,null,null)
 B.SC=new A.w(4281549141)
 B.Nf=new A.u(!0,B.SC,null,null,null,null,null,B.hY,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null)
-B.b0b=new A.aO("Inputs:",null,B.Nf,null,null,null,null,null,null,null)
+B.b0c=new A.aO("Inputs:",null,B.Nf,null,null,null,null,null,null,null)
 B.mX=new A.aO("Save",null,null,null,null,null,null,null,null,null)
-B.b0d=new A.aO("Process:",null,B.mW,null,null,null,null,null,null,null)
-B.b0e=new A.aO("Generate scenarios",null,null,null,null,null,null,null,null,null)
-B.b0f=new A.aO("Scenario graphs",null,B.dc,null,null,null,null,null,null,null)
-B.b0i=new A.aO("Run / Export",null,null,null,null,null,null,null,null,null)
+B.b0e=new A.aO("Process:",null,B.mW,null,null,null,null,null,null,null)
+B.b0f=new A.aO("Generate scenarios",null,null,null,null,null,null,null,null,null)
+B.b0g=new A.aO("Scenario graphs",null,B.dc,null,null,null,null,null,null,null)
+B.b0j=new A.aO("Run / Export",null,null,null,null,null,null,null,null,null)
 B.Nn=new A.aO("Recompute",null,null,null,null,null,null,null,null,null)
-B.b0k=new A.aO("Save project JSON",null,null,null,null,null,null,null,null,null)
-B.b0l=new A.aO("Next",null,null,null,null,null,null,null,null,null)
-B.b0n=new A.aO("Import from OpenLCA",null,null,null,null,null,null,null,null,null)
-B.b0p=new A.aO("Scenario changes",null,B.dc,null,null,null,null,null,null,null)
-B.b0r=new A.aO("Resize",null,null,null,null,null,null,null,null,null)
-B.b0s=new A.aO("Make the process box longer or shorter",null,null,null,null,null,null,null,null,null)
-B.b0u=new A.aO("Set as functional unit",null,null,null,null,null,null,null,null,null)
-B.b0v=new A.aO("Download PDF",null,null,null,null,null,null,null,null,null)
-B.b0w=new A.aO("Run this analysis via OpenLCA IPC or Brightway2.",null,null,null,null,null,null,null,null,null)
-B.b0x=new A.aO("Add",null,null,null,null,null,null,null,null,null)
-B.b0y=new A.aO("Run LCA",null,null,null,null,null,null,null,null,null)
-B.b0z=new A.aO("Adjust height scale",null,null,null,null,null,null,null,null,null)
-B.b0B=new A.aO("Apply",null,null,null,null,null,null,null,null,null)
-B.b0A=new A.aO("Clear stored key",null,null,null,null,null,null,null,null,null)
-B.b0C=new A.aO("Emissions",null,B.dc,null,null,null,null,null,null,null)
-B.b0D=new A.aO("Results ready",null,null,null,null,null,null,null,null,null)
-B.b0E=new A.aO("Import Paper Base Model",null,null,null,null,null,null,null,null,null)
-B.b0F=new A.aO("Regenerate scenarios",null,null,null,null,null,null,null,null,null)
-B.b0J=new A.aO("Show key",null,null,null,null,null,null,null,null,null)
-B.b0K=new A.aO("Insert parameter name",null,B.dc,null,null,null,null,null,null,null)
+B.b0l=new A.aO("Save project JSON",null,null,null,null,null,null,null,null,null)
+B.b0m=new A.aO("Next",null,null,null,null,null,null,null,null,null)
+B.b0o=new A.aO("Import from OpenLCA",null,null,null,null,null,null,null,null,null)
+B.b0q=new A.aO("Scenario changes",null,B.dc,null,null,null,null,null,null,null)
+B.b0s=new A.aO("Resize",null,null,null,null,null,null,null,null,null)
+B.b0t=new A.aO("Make the process box longer or shorter",null,null,null,null,null,null,null,null,null)
+B.b0v=new A.aO("Set as functional unit",null,null,null,null,null,null,null,null,null)
+B.b0w=new A.aO("Download PDF",null,null,null,null,null,null,null,null,null)
+B.b0x=new A.aO("Run this analysis via OpenLCA IPC or Brightway2.",null,null,null,null,null,null,null,null,null)
+B.b0y=new A.aO("Add",null,null,null,null,null,null,null,null,null)
+B.b0z=new A.aO("Run LCA",null,null,null,null,null,null,null,null,null)
+B.b0A=new A.aO("Import Paper Base Model(Brightway2 only)",null,null,null,null,null,null,null,null,null)
+B.b0B=new A.aO("Adjust height scale",null,null,null,null,null,null,null,null,null)
+B.b0D=new A.aO("Apply",null,null,null,null,null,null,null,null,null)
+B.b0C=new A.aO("Clear stored key",null,null,null,null,null,null,null,null,null)
+B.b0E=new A.aO("Emissions",null,B.dc,null,null,null,null,null,null,null)
+B.b0F=new A.aO("Results ready",null,null,null,null,null,null,null,null,null)
+B.b0G=new A.aO("Regenerate scenarios",null,null,null,null,null,null,null,null,null)
+B.b0K=new A.aO("Show key",null,null,null,null,null,null,null,null,null)
+B.b0L=new A.aO("Insert parameter name",null,B.dc,null,null,null,null,null,null,null)
 B.dD=new A.aO("Cancel",null,null,null,null,null,null,null,null,null)
-B.aYv=new A.u(!0,B.an,null,null,null,null,12,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null)
-B.b0N=new A.aO("Preview",null,B.aYv,null,null,null,null,null,null,null)
-B.b0O=new A.aO("Stored locally on this device/browser only. It is never sent to your OpenLCA backend.",null,null,null,null,null,null,null,null,null)
-B.b0R=new A.aO("Outputs:",null,B.Nf,null,null,null,null,null,null,null)
+B.aYw=new A.u(!0,B.an,null,null,null,null,12,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null)
+B.b0O=new A.aO("Preview",null,B.aYw,null,null,null,null,null,null,null)
+B.b0P=new A.aO("Stored locally on this device/browser only. It is never sent to your OpenLCA backend.",null,null,null,null,null,null,null,null,null)
+B.b0S=new A.aO("Outputs:",null,B.Nf,null,null,null,null,null,null,null)
 B.No=new A.aO("Add parameter",null,null,null,null,null,null,null,null,null)
-B.b0S=new A.aO("Choose LCA Runner",null,null,null,null,null,null,null,null,null)
-B.b0T=new A.aO("Close",null,null,null,null,null,null,null,null,null)
-B.b0U=new A.aO("Brightway2",null,null,null,null,null,null,null,null,null)
+B.b0T=new A.aO("Choose LCA Runner",null,null,null,null,null,null,null,null,null)
+B.b0U=new A.aO("Close",null,null,null,null,null,null,null,null,null)
+B.b0V=new A.aO("Brightway2",null,null,null,null,null,null,null,null,null)
 B.Np=new A.aO("Inputs",null,B.dc,null,null,null,null,null,null,null)
-B.b0W=new A.aO("LLM Scenario Generator",null,null,null,null,null,null,null,null,null)
+B.b0X=new A.aO("LLM Scenario Generator",null,null,null,null,null,null,null,null,null)
 B.aZ2=new A.u(!0,null,null,null,null,null,18,B.cx,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null)
-B.b0X=new A.aO("Parameter manager",null,B.aZ2,null,null,null,null,null,null,null)
-B.b0Z=new A.aO("OpenLCA IPC",null,null,null,null,null,null,null,null,null)
-B.b10=new A.aO("Resize process",null,null,null,null,null,null,null,null,null)
-B.b11=new A.aO("Describe Scenario & Export",null,null,null,null,null,null,null,null,null)
+B.b0Y=new A.aO("Parameter manager",null,B.aZ2,null,null,null,null,null,null,null)
+B.b1_=new A.aO("OpenLCA IPC",null,null,null,null,null,null,null,null,null)
+B.b11=new A.aO("Resize process",null,null,null,null,null,null,null,null,null)
+B.b12=new A.aO("Describe Scenario & Export",null,null,null,null,null,null,null,null,null)
 B.aYN=new A.u(!0,null,null,null,null,null,15,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null)
-B.b12=new A.aO("Describe your LCA scenario in detail. This description will be sent along with your model data.",null,B.aYN,null,null,null,null,null,null,null)
-B.b14=new A.aO("See Graphs",null,null,null,null,null,null,null,null,null)
-B.aYw=new A.u(!0,B.an,null,null,null,null,14,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null)
-B.b17=new A.aO("Create an empty canvas, import the paper base model, or import from OpenLCA.",null,B.aYw,B.dC,null,null,null,null,null,null)
+B.b13=new A.aO("Describe your LCA scenario in detail. This description will be sent along with your model data.",null,B.aYN,null,null,null,null,null,null,null)
+B.b15=new A.aO("See Graphs",null,null,null,null,null,null,null,null,null)
 B.Nq=new A.aO("Outputs",null,B.dc,null,null,null,null,null,null,null)
 B.b18=new A.aO('Tip: copy a JSON that contains "global_parameters" or "process_parameters" to the clipboard to populate this list.',null,null,null,null,null,null,null,null,null)
 B.b19=new A.aO("New Empty",null,null,null,null,null,null,null,null,null)

@@ -9,6 +9,7 @@ from functools import lru_cache
 from typing import Dict, Tuple, Any, List, Optional
 
 import bw2data as bd
+import bw2io
 from bw2data.errors import InvalidExchange
 
 try:
@@ -28,10 +29,45 @@ def _parse_missing(exc_msg: str, db_name: str) -> set[str]:
 # --- biosphere helpers ---
 
 def ensure_biosphere(name: str = "biosphere3") -> None:
-    """Ensure the biosphere database exists; raise if not."""
+    """Ensure the biosphere database exists and has datasets.
+
+    In some user environments we observed stale metadata where ``biosphere3`` is
+    registered but its dataset table is empty. That makes all emissions drop and
+    LCIA fail with ``EmptyBiosphere``. For ``biosphere3`` we auto-heal by
+    rebuilding the default biosphere.
+    """
     if name not in bd.databases:
-        raise RuntimeError(f"Biosphere database '{name}' not found")
-    L.info("Using biosphere database '%s'", name)
+        if name != "biosphere3":
+            raise RuntimeError(f"Biosphere database '{name}' not found")
+        L.warning("Biosphere '%s' not found. Rebuilding default biosphere3.", name)
+        bw2io.create_default_biosphere3(overwrite=True)
+
+    db = bd.Database(name)
+    size = len(db)
+
+    if size == 0:
+        if name != "biosphere3":
+            raise RuntimeError(
+                f"Biosphere database '{name}' exists but has zero datasets"
+            )
+        L.warning(
+            "Biosphere '%s' is present but empty. Rebuilding default biosphere3.",
+            name,
+        )
+        try:
+            del bd.databases[name]
+        except Exception:
+            # If delete fails, try overwrite path below anyway.
+            pass
+        bw2io.create_default_biosphere3(overwrite=True)
+        db = bd.Database(name)
+        size = len(db)
+        if size == 0:
+            raise RuntimeError(
+                "Biosphere3 rebuild completed but database is still empty"
+            )
+
+    L.info("Using biosphere database '%s' with %d datasets", name, size)
 
 def ensure_custom_biosphere(name: str = "custom_biosphere") -> bd.Database:
     """Ensure a custom biosphere DB exists and is marked as type 'biosphere'."""

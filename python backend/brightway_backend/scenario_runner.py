@@ -615,7 +615,12 @@ def run_many(
             results[name] = {"success": True, "result": single}
         except Exception as e:
             L.exception("Scenario '%s' failed", name)
-            results[name] = {"success": False, "error": str(e)}
+            msg = str(e).strip() or type(e).__name__
+            results[name] = {
+                "success": False,
+                "error": msg,
+                "error_type": type(e).__name__,
+            }
 
     return results
  
