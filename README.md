@@ -36,7 +36,6 @@ flutter pub get
 flutter build web --release --pwa-strategy=none
 ```
 
-After building, commit `build/web` so end users can run without Flutter.
 
 ## Getting Started
 
