@@ -2,7 +2,7 @@
 
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
@@ -77,6 +77,60 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
   Map<String, dynamic>? _mergedScenarios; // scenarioName -> { model, meta? }
   Map<String, List<Map<String, dynamic>>>? _rawDeltasByScenario;
   List<String> _functionsUsed = const [];
+  LlmScenarioAbstention? _abstention;
+  int _generationRunSeq = 0;
+
+  void _debugLog(String message) {
+    final timestamp = DateTime.now().toIso8601String();
+    debugPrint('[LCA][UI][$timestamp] $message');
+  }
+
+  String _oneLine(String text) {
+    return text.replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
+  String _previewPrompt(String text, {int maxChars = 200}) {
+    final compact = _oneLine(text);
+    if (compact.length <= maxChars) return compact;
+    return '${compact.substring(0, maxChars)}...';
+  }
+
+  Map<String, int> _collectScenarioInputStats() {
+    final globalCount = widget.parameters?.global.length ?? 0;
+    final processSetCount = widget.parameters?.perProcess.length ?? 0;
+    final processParamCount = widget.parameters?.perProcess.values
+            .fold<int>(0, (sum, params) => sum + params.length) ??
+        0;
+
+    final baseModelForLlm = {
+      'processes': widget.processes
+          .map((p) => p.copyWithFields(emissions: const <FlowValue>[]).toJson())
+          .toList(),
+      'flows': widget.flows,
+      if (widget.parameters != null) 'parameters': widget.parameters!.toJson(),
+    };
+    final userPayload = {
+      'scenario_prompt': widget.prompt,
+      'baseModel': baseModelForLlm,
+    };
+
+    final baseModelFull = {
+      'processes': widget.processes.map((p) => p.toJson()).toList(),
+      'flows': widget.flows,
+      if (widget.parameters != null) 'parameters': widget.parameters!.toJson(),
+    };
+
+    return {
+      'promptChars': widget.prompt.length,
+      'processes': widget.processes.length,
+      'flows': widget.flows.length,
+      'globalParameters': globalCount,
+      'processParameterSets': processSetCount,
+      'processParameters': processParamCount,
+      'userPayloadBytes': utf8.encode(jsonEncode(userPayload)).length,
+      'fullModelBytes': utf8.encode(jsonEncode(baseModelFull)).length,
+    };
+  }
 
   void _guardWebMixedContent(Uri uri) {
     if (kIsWeb && Uri.base.scheme == 'https' && uri.scheme == 'http') {
@@ -255,8 +309,13 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
   }
 
   Future<void> _onGeneratePressed() async {
+    final runId = ++_generationRunSeq;
+    final runTimer = Stopwatch()..start();
+    _debugLog('GEN[$runId] Generate pressed');
+
     final apiKey = await _ensureOpenAiApiKey();
     if (apiKey == null || apiKey.trim().isEmpty) {
+      _debugLog('GEN[$runId] Missing API key, aborting');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -266,30 +325,73 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       return;
     }
 
+    final stats = _collectScenarioInputStats();
+    _debugLog(
+      'GEN[$runId] Inputs: promptChars=${stats['promptChars']} '
+      'processes=${stats['processes']} flows=${stats['flows']} '
+      'globalParams=${stats['globalParameters']} '
+      'processParamSets=${stats['processParameterSets']} '
+      'processParams=${stats['processParameters']} '
+      'userPayloadBytes=${stats['userPayloadBytes']} '
+      'fullModelBytes=${stats['fullModelBytes']} '
+      'apiBase=$_defaultOpenAiBase apiKey=${_maskApiKey(apiKey)}',
+    );
+    _debugLog('GEN[$runId] Prompt preview: "${_previewPrompt(widget.prompt)}"');
+
     setState(() {
       _isLoading = true;
       _mergedScenarios = null;
       _rawDeltasByScenario = null;
       _functionsUsed = const [];
+      _abstention = null;
     });
 
     try {
+      _debugLog('GEN[$runId] Creating controller');
       final controller = LlmScenarioController(
         apiKey: apiKey,
         apiBase: _defaultOpenAiBase,
+        log: (message) => _debugLog('GEN[$runId] $message'),
       );
+      _debugLog('GEN[$runId] Calling generateAndMergeScenarios');
       final result = await controller.generateAndMergeScenarios(
         prompt: widget.prompt,
         processes: widget.processes,
         flows: widget.flows,
         parameters: widget.parameters,
       );
+      _debugLog(
+        'GEN[$runId] Completed in ${runTimer.elapsedMilliseconds}ms '
+        'scenarios=${result.mergedScenarios.length} '
+        'functionsUsed=${result.functionsUsed.join(',')} '
+        'unsupported=${result.isUnsupported}',
+      );
+
+      if (result.abstention != null) {
+        if (!mounted) return;
+        setState(() {
+          _mergedScenarios = null;
+          _rawDeltasByScenario = null;
+          _functionsUsed = result.functionsUsed;
+          _abstention = result.abstention;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Request unsupported: ${result.abstention!.reason}',
+            ),
+            duration: const Duration(seconds: 7),
+          ),
+        );
+        return;
+      }
 
       if (!mounted) return;
       setState(() {
         _mergedScenarios = result.mergedScenarios;
         _rawDeltasByScenario = result.rawDeltasByScenario;
         _functionsUsed = result.functionsUsed;
+        _abstention = null;
       });
       final mergeWarnings = _collectMergeWarnings(result.mergedScenarios);
       if (mergeWarnings.isNotEmpty) {
@@ -305,19 +407,31 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           ),
         );
       }
-    } catch (e) {
+    } catch (e, st) {
+      _debugLog(
+        'GEN[$runId] Failed after ${runTimer.elapsedMilliseconds}ms: $e',
+      );
+      _debugLog('GEN[$runId] StackTrace:\n$st');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Scenario generation failed: $e')),
       );
     } finally {
       if (mounted) setState(() => _isLoading = false);
+      _debugLog(
+        'GEN[$runId] Finished. totalElapsedMs=${runTimer.elapsedMilliseconds}',
+      );
     }
   }
 
   Future<Map<String, dynamic>> _runLCAForAllScenarios() async {
+    final runId = DateTime.now().millisecondsSinceEpoch;
+    _debugLog(
+      'BW[$runId] _runLCAForAllScenarios start. scenarioCount=${_mergedScenarios?.length ?? 0}',
+    );
     final Map<String, dynamic> allResults = {};
     if (_mergedScenarios == null || _mergedScenarios!.isEmpty) {
+      _debugLog('BW[$runId] No merged scenarios available; returning empty');
       return allResults;
     }
 
@@ -332,12 +446,23 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           scenarioName: {'model': model},
         },
       });
+      final requestBytes = utf8.encode(body).length;
+      final timer = Stopwatch()..start();
+      _debugLog(
+        'BW[$runId] POST /run_lca_all scenario="$scenarioName" bytes=$requestBytes',
+      );
 
       try {
         final response = await http.post(
           uri,
           headers: {'Content-Type': 'application/json'},
           body: body,
+        );
+        timer.stop();
+        _debugLog(
+          'BW[$runId] scenario="$scenarioName" status=${response.statusCode} '
+          'elapsedMs=${timer.elapsedMilliseconds} '
+          'responseBytes=${utf8.encode(response.body).length}',
         );
 
         if (response.statusCode == 200) {
@@ -349,7 +474,12 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
             'error': 'HTTP ${response.statusCode}: ${response.reasonPhrase}',
           };
         }
-      } catch (e) {
+      } catch (e, st) {
+        timer.stop();
+        _debugLog(
+          'BW[$runId] scenario="$scenarioName" failed after ${timer.elapsedMilliseconds}ms: $e',
+        );
+        _debugLog('BW[$runId] scenario="$scenarioName" StackTrace:\n$st');
         allResults[scenarioName] = {
           'success': false,
           'error': e.toString(),
@@ -357,6 +487,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       }
     }
 
+    _debugLog('BW[$runId] _runLCAForAllScenarios done');
     return allResults;
   }
 
@@ -1032,6 +1163,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
   @override
   Widget build(BuildContext context) {
     final hasResults = _mergedScenarios != null;
+    final abstention = _abstention;
 
     return Scaffold(
       appBar: AppBar(title: const Text('LLM Scenario Generator')),
@@ -1064,6 +1196,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
                             ),
                           ],
                         ),
+                        if (abstention != null) ...[
+                          const SizedBox(height: 14),
+                          _UnsupportedResultCard(abstention: abstention),
+                        ],
                       ],
                     ),
                   )
@@ -1182,6 +1318,38 @@ class _SummaryTile extends StatelessWidget {
         const SizedBox(height: 6),
         child,
       ],
+    );
+  }
+}
+
+class _UnsupportedResultCard extends StatelessWidget {
+  final LlmScenarioAbstention abstention;
+
+  const _UnsupportedResultCard({required this.abstention});
+
+  @override
+  Widget build(BuildContext context) {
+    final requiredCapability = abstention.requiredCapability?.trim() ?? '';
+    return Card(
+      color: const Color(0xFFFFF3CD),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Request unsupported',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            Text('Reason: ${abstention.reason}'),
+            if (requiredCapability.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text('Required capability: $requiredCapability'),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

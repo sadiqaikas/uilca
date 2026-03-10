@@ -18,12 +18,37 @@ class LlmScenarioResult {
   final Map<String, dynamic> mergedScenarios;
   final Map<String, List<Map<String, dynamic>>> rawDeltasByScenario;
   final List<String> functionsUsed;
+  final LlmScenarioAbstention? abstention;
+
+  bool get isUnsupported => abstention != null;
 
   const LlmScenarioResult({
     required this.mergedScenarios,
     required this.rawDeltasByScenario,
     required this.functionsUsed,
+    this.abstention,
   });
+}
+
+/// Structured abstention returned when a request is unsupported or blocked.
+class LlmScenarioAbstention {
+  final String status;
+  final String reason;
+  final String? requiredCapability;
+
+  const LlmScenarioAbstention({
+    this.status = 'unsupported',
+    required this.reason,
+    this.requiredCapability,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'status': status,
+        'reason': reason,
+        if (requiredCapability != null &&
+            requiredCapability!.trim().isNotEmpty)
+          'required_capability': requiredCapability,
+      };
 }
 
 /// Signature for an injectable one-to-many distance handler:
@@ -34,10 +59,19 @@ typedef DistanceOneToManyHandler = Map<String, dynamic> Function(
 /// Handles building LCA models for LLM, calling OpenAI, and merging scenarios.
 class LlmScenarioController {
   static const String _defaultOpenAiBase = 'https://api.openai.com/v1';
-  static const String _controllerRevision = 'rev-2026-03-03-a';
+  static const String _controllerRevision = 'rev-2026-03-09-validation-hardening';
+  static const Duration _openAiRequestTimeout = Duration(seconds: 150);
   static const String _defaultApiKey = String.fromEnvironment(
     'OPENAI_API_KEY',
     defaultValue: '',
+  );
+  static final Set<String> _allowedToolNames = llmFunctions
+      .map((f) => (f['name'] ?? '').toString().trim())
+      .where((name) => name.isNotEmpty)
+      .toSet();
+  static final RegExp _structuralKeywordPattern = RegExp(
+    r'"(?:processes|flows|inputs|outputs|emissions|biosphere|biosphere_flows|exchanges|exchange|datasets?|background_dataset|background_datasets|technosphere|flow_id|add_process|remove_process|replace_process)"',
+    caseSensitive: false,
   );
 
   final String apiKey;
@@ -186,6 +220,7 @@ class LlmScenarioController {
       userPayload: userPayload,
       functions: functions,
       jsonOnly: false, // may receive tool/function calls
+      callLabel: 'first_call',
     );
     _log('[LCA] First call returned. Parsing for tools or direct JSON');
 
@@ -199,6 +234,21 @@ class LlmScenarioController {
     _log(
         '[LCA] Parsed assistant output. functionsUsed=${parsed.functionsUsed.join(', ')}');
 
+    if (parsed.abstention != null) {
+      final abstention = parsed.abstention!;
+      _log(
+        '[LCA] Blocking merge with abstention. '
+        'status=${abstention.status} reason="${abstention.reason}"',
+      );
+      _log('[LCA] === generateAndMergeScenarios END (unsupported) ===');
+      return LlmScenarioResult(
+        mergedScenarios: const <String, dynamic>{},
+        rawDeltasByScenario: const <String, List<Map<String, dynamic>>>{},
+        functionsUsed: parsed.functionsUsed,
+        abstention: abstention,
+      );
+    }
+
     // Merge scenarios locally
     _log('[LCA] Merging scenarios locally');
     final mergedFull =
@@ -210,6 +260,7 @@ class LlmScenarioController {
       mergedScenarios: mergedFull['scenarios'] as Map<String, dynamic>,
       rawDeltasByScenario: parsed.rawDeltasByScenario,
       functionsUsed: parsed.functionsUsed,
+      abstention: null,
     );
   }
 
@@ -222,6 +273,7 @@ class LlmScenarioController {
     String functionCallMode = 'auto', // 'auto' | 'none' or a function name
     List<Map<String, dynamic>>? messagesOverride,
     bool jsonOnly = false,
+    String callLabel = 'default',
   }) async {
     // Convert legacy functions -> tools
     List<Map<String, dynamic>>? tools;
@@ -271,6 +323,7 @@ class LlmScenarioController {
     }
 
     final encodedBody = jsonEncode(body);
+    final bodyBytes = utf8.encode(encodedBody).length;
     final headers = <String, String>{
       'Content-Type': 'application/json',
       'Accept': 'application/json',
@@ -278,11 +331,13 @@ class LlmScenarioController {
     };
     _log(
       '[LCA][$_controllerRevision] POST $uri (apiBaseRaw="$apiBase") '
-      'jsonOnly=$jsonOnly messages=${(body['messages'] as List).length}',
+      'callLabel=$callLabel jsonOnly=$jsonOnly '
+      'messages=${(body['messages'] as List).length} bodyBytes=$bodyBytes',
     );
 
     http.Response? resp;
     for (var attempt = 1; attempt <= 2; attempt += 1) {
+      final sw = Stopwatch()..start();
       try {
         resp = await http
             .post(
@@ -290,20 +345,33 @@ class LlmScenarioController {
               headers: headers,
               body: encodedBody,
             )
-            .timeout(const Duration(seconds: 70));
+            .timeout(_openAiRequestTimeout);
+        sw.stop();
+        _log(
+          '[LCA] OpenAI response received. '
+          'callLabel=$callLabel attempt=$attempt elapsedMs=${sw.elapsedMilliseconds}',
+        );
         break;
       } on TimeoutException catch (e) {
+        sw.stop();
         if (attempt >= 2) {
           throw Exception(
             'OpenAI request timed out [$_controllerRevision]: $e '
-            '(attempts=$attempt, resolvedUri=$uri, apiBaseRaw="$apiBase")',
+            '(attempts=$attempt, callLabel=$callLabel, bodyBytes=$bodyBytes, '
+            'resolvedUri=$uri, apiBaseRaw="$apiBase")',
           );
         }
-        _log('[LCA] Timeout talking to OpenAI. Retrying once...');
+        _log(
+          '[LCA] Timeout talking to OpenAI. '
+          'callLabel=$callLabel attempt=$attempt bodyBytes=$bodyBytes '
+          'elapsedMs=${sw.elapsedMilliseconds}. Retrying once...',
+        );
       } on http.ClientException catch (e) {
+        sw.stop();
         if (_shouldRetryClientException(e, attempt)) {
           _log(
-              '[LCA] OpenAI network error on attempt $attempt. Retrying once...');
+              '[LCA] OpenAI network error. callLabel=$callLabel attempt=$attempt '
+              'elapsedMs=${sw.elapsedMilliseconds}. Retrying once...');
           await Future<void>.delayed(const Duration(milliseconds: 300));
           continue;
         }
@@ -374,12 +442,20 @@ class LlmScenarioController {
       _log('[LCA] tool_calls count=${toolCalls.length}');
 
       if (toolCalls.isEmpty) {
-        final scenarios = _extractScenariosFromMessage(message);
-        _log('[LCA] No tool calls. Parsed scenarios directly');
-        rawDeltasByScenario = _mapChanges(scenarios);
+        final payload = _extractAssistantPayloadFromMessage(message);
+        _log('[LCA] No tool calls. Parsed assistant payload directly');
+        final validated = _mapChangesWithValidation(
+          payload,
+          baseModelFull: baseModelFull,
+          requestedTools: functionsUsed,
+        );
         return _ParsedLLMOutput(
-            functionsUsed: functionsUsed,
-            rawDeltasByScenario: rawDeltasByScenario);
+          functionsUsed: functionsUsed,
+          rawDeltasByScenario:
+              validated.rawDeltasByScenario ??
+                  const <String, List<Map<String, dynamic>>>{},
+          abstention: validated.abstention,
+        );
       }
 
       final followup = <Map<String, dynamic>>[
@@ -394,27 +470,87 @@ class LlmScenarioController {
 
       var idx = 0;
       for (final tc in toolCalls) {
-        final tool = (tc as Map<String, dynamic>);
-        final toolId = tool['id'] as String? ?? 'tool_call_$idx';
-        final fn = tool['function'] as Map<String, dynamic>;
-        final name = fn['name'] as String;
-        final argsRaw = fn['arguments'];
-        final Map<String, dynamic> args = (argsRaw is String)
-            ? jsonDecode(argsRaw)
-            : (argsRaw as Map).cast<String, dynamic>();
+        final tool = (tc as Map).cast<String, dynamic>();
+        final toolId = tool['id']?.toString() ?? 'tool_call_$idx';
+        final fnRaw = tool['function'];
+        if (fnRaw is! Map) {
+          return _ParsedLLMOutput(
+            functionsUsed: functionsUsed,
+            rawDeltasByScenario: const <String, List<Map<String, dynamic>>>{},
+            abstention: const LlmScenarioAbstention(
+              reason: 'Tool call payload is malformed (missing function object).',
+              requiredCapability: 'Valid tool call schema from the model',
+            ),
+          );
+        }
+        final fn = fnRaw.cast<String, dynamic>();
+        final name = (fn['name'] ?? '').toString().trim();
+        if (name.isEmpty) {
+          return _ParsedLLMOutput(
+            functionsUsed: functionsUsed,
+            rawDeltasByScenario: const <String, List<Map<String, dynamic>>>{},
+            abstention: const LlmScenarioAbstention(
+              reason: 'Tool call payload is malformed (missing function name).',
+              requiredCapability: 'Valid tool call schema from the model',
+            ),
+          );
+        }
         functionsUsed.add(name);
+        if (!_isAllowedToolName(name)) {
+          _log('[LCA] Blocking non-allow-listed tool request: "$name"');
+          return _ParsedLLMOutput(
+            functionsUsed: functionsUsed,
+            rawDeltasByScenario: const <String, List<Map<String, dynamic>>>{},
+            abstention: LlmScenarioAbstention(
+              reason: 'Tool "$name" is not allow-listed for this workflow.',
+              requiredCapability: 'Implement and allow-list tool "$name"',
+            ),
+          );
+        }
+        final argsRaw = fn['arguments'];
+        Map<String, dynamic> args;
+        try {
+          final decodedArgs =
+              (argsRaw is String) ? jsonDecode(argsRaw) : argsRaw;
+          if (decodedArgs is! Map) {
+            return _ParsedLLMOutput(
+              functionsUsed: functionsUsed,
+              rawDeltasByScenario:
+                  const <String, List<Map<String, dynamic>>>{},
+              abstention: LlmScenarioAbstention(
+                reason:
+                    'Tool "$name" arguments must be a JSON object and were rejected.',
+                requiredCapability: 'Valid JSON arguments for "$name"',
+              ),
+            );
+          }
+          args = decodedArgs.cast<String, dynamic>();
+        } on FormatException {
+          return _ParsedLLMOutput(
+            functionsUsed: functionsUsed,
+            rawDeltasByScenario: const <String, List<Map<String, dynamic>>>{},
+            abstention: LlmScenarioAbstention(
+              reason:
+                  'Tool "$name" arguments were invalid JSON and execution was blocked.',
+              requiredCapability: 'Valid JSON arguments for "$name"',
+            ),
+          );
+        }
         _log(
             '[LCA] Executing tool[$idx] name=$name id=$toolId args=${jsonEncode(args)}');
 
         final localResult = _runLocalFunction(name, args, baseModelFull);
         final Map<String, dynamic> toolReturn =
             _wrapToolResult(name, localResult);
-        _log('[LCA] Tool[$idx] result keys=${toolReturn.keys.join(', ')}');
+        final toolContent = jsonEncode(toolReturn);
+        _log(
+            '[LCA] Tool[$idx] result keys=${toolReturn.keys.join(', ')} '
+            'bytes=${utf8.encode(toolContent).length}');
 
         followup.add({
           'role': 'tool',
           'tool_call_id': toolId,
-          'content': jsonEncode(toolReturn),
+          'content': toolContent,
         });
         idx += 1;
       }
@@ -425,23 +561,81 @@ class LlmScenarioController {
         userPayload: userPayload,
         messagesOverride: followup,
         jsonOnly: true,
+        callLabel: 'second_call_after_tools',
       );
 
-      final scenarios = _extractScenariosFromMessage(
+      final payload = _extractAssistantPayloadFromMessage(
         (secondResp['choices'] as List).first['message'],
       );
-      _log('[LCA] Final scenarios received. Mapping changes');
-      rawDeltasByScenario = _mapChanges(scenarios);
+      _log('[LCA] Final payload received. Validating and mapping changes');
+      final validated = _mapChangesWithValidation(
+        payload,
+        baseModelFull: baseModelFull,
+        requestedTools: functionsUsed,
+      );
+      return _ParsedLLMOutput(
+        functionsUsed: functionsUsed,
+        rawDeltasByScenario: validated.rawDeltasByScenario ??
+            const <String, List<Map<String, dynamic>>>{},
+        abstention: validated.abstention,
+      );
     }
     // Legacy function_call path
     else if (message.containsKey('function_call') &&
         message['function_call'] != null) {
-      final name = message['function_call']['name'] as String;
-      final argsRaw = message['function_call']['arguments'];
-      final Map<String, dynamic> args = (argsRaw is String)
-          ? jsonDecode(argsRaw)
-          : (argsRaw as Map).cast<String, dynamic>();
+      final functionCall =
+          (message['function_call'] as Map).cast<String, dynamic>();
+      final name = (functionCall['name'] ?? '').toString().trim();
+      if (name.isEmpty) {
+        return _ParsedLLMOutput(
+          functionsUsed: functionsUsed,
+          rawDeltasByScenario: const <String, List<Map<String, dynamic>>>{},
+          abstention: const LlmScenarioAbstention(
+            reason:
+                'Legacy function_call payload is malformed (missing function name).',
+            requiredCapability: 'Valid tool call schema from the model',
+          ),
+        );
+      }
       functionsUsed.add(name);
+      if (!_isAllowedToolName(name)) {
+        _log('[LCA] Blocking non-allow-listed legacy function call: "$name"');
+        return _ParsedLLMOutput(
+          functionsUsed: functionsUsed,
+          rawDeltasByScenario: const <String, List<Map<String, dynamic>>>{},
+          abstention: LlmScenarioAbstention(
+            reason: 'Tool "$name" is not allow-listed for this workflow.',
+            requiredCapability: 'Implement and allow-list tool "$name"',
+          ),
+        );
+      }
+      final argsRaw = functionCall['arguments'];
+      Map<String, dynamic> args;
+      try {
+        final decodedArgs = (argsRaw is String) ? jsonDecode(argsRaw) : argsRaw;
+        if (decodedArgs is! Map) {
+          return _ParsedLLMOutput(
+            functionsUsed: functionsUsed,
+            rawDeltasByScenario: const <String, List<Map<String, dynamic>>>{},
+            abstention: LlmScenarioAbstention(
+              reason:
+                  'Tool "$name" arguments must be a JSON object and were rejected.',
+              requiredCapability: 'Valid JSON arguments for "$name"',
+            ),
+          );
+        }
+        args = decodedArgs.cast<String, dynamic>();
+      } on FormatException {
+        return _ParsedLLMOutput(
+          functionsUsed: functionsUsed,
+          rawDeltasByScenario: const <String, List<Map<String, dynamic>>>{},
+          abstention: LlmScenarioAbstention(
+            reason:
+                'Tool "$name" arguments were invalid JSON and execution was blocked.',
+            requiredCapability: 'Valid JSON arguments for "$name"',
+          ),
+        );
+      }
       _log('[LCA] Legacy function_call name=$name args=${jsonEncode(args)}');
 
       final localResult = _runLocalFunction(name, args, baseModelFull);
@@ -467,25 +661,50 @@ class LlmScenarioController {
         userPayload: userPayload,
         messagesOverride: secondMessages,
         jsonOnly: true,
+        callLabel: 'second_call_after_legacy_function',
       );
 
-      final scenarios = _extractScenariosFromMessage(
+      final payload = _extractAssistantPayloadFromMessage(
         (secondResp['choices'] as List).first['message'],
       );
-      _log('[LCA] Final scenarios received. Mapping changes');
-      rawDeltasByScenario = _mapChanges(scenarios);
+      _log('[LCA] Final payload received. Validating and mapping changes');
+      final validated = _mapChangesWithValidation(
+        payload,
+        baseModelFull: baseModelFull,
+        requestedTools: functionsUsed,
+      );
+      return _ParsedLLMOutput(
+        functionsUsed: functionsUsed,
+        rawDeltasByScenario: validated.rawDeltasByScenario ??
+            const <String, List<Map<String, dynamic>>>{},
+        abstention: validated.abstention,
+      );
     }
     // Direct scenarios
     else {
-      _log('[LCA] No tools. Attempting to parse scenarios directly');
-      final scenarios = _extractScenariosFromMessage(message);
-      rawDeltasByScenario = _mapChanges(scenarios);
-      _log('[LCA] Direct scenarios parsed and mapped');
+      _log('[LCA] No tools. Attempting to parse assistant payload directly');
+      final payload = _extractAssistantPayloadFromMessage(message);
+      final validated = _mapChangesWithValidation(
+        payload,
+        baseModelFull: baseModelFull,
+        requestedTools: functionsUsed,
+      );
+      rawDeltasByScenario = validated.rawDeltasByScenario ??
+          const <String, List<Map<String, dynamic>>>{};
+      if (validated.abstention == null) {
+        _log('[LCA] Direct scenarios validated and mapped');
+      }
+      return _ParsedLLMOutput(
+        functionsUsed: functionsUsed,
+        rawDeltasByScenario: rawDeltasByScenario,
+        abstention: validated.abstention,
+      );
     }
 
     return _ParsedLLMOutput(
       functionsUsed: functionsUsed,
       rawDeltasByScenario: rawDeltasByScenario,
+      abstention: null,
     );
   }
 
@@ -513,7 +732,7 @@ class LlmScenarioController {
     _log('[LCA] _runLocalFunction dispatch name=$name');
     switch (name) {
       case 'oneAtATimeSensitivity':
-        return oneAtATimeSensitivity(
+        final ofat = oneAtATimeSensitivity(
           baseModel: baseModelFull,
           parameterNames: (args['parameterNames'] as List).cast<String>(),
           percent: (args['percent'] as num).toDouble(),
@@ -522,8 +741,10 @@ class LlmScenarioController {
               .map((n) => n.toDouble())
               .toList(),
         );
+        _log('[LCA] oneAtATimeSensitivity produced ${ofat.length} change-list(s)');
+        return ofat;
       case 'fullSystemUncertainty':
-        return fullSystemUncertainty(
+        final full = fullSystemUncertainty(
           baseModel: baseModelFull,
           percent: (args['percent'] as num).toDouble(),
           levels: (args['levels'] as List?)
@@ -531,12 +752,16 @@ class LlmScenarioController {
               .map((n) => n.toDouble())
               .toList(),
         );
+        _log('[LCA] fullSystemUncertainty produced ${full.length} change-list(s)');
+        return full;
       case 'simplexLatticeDesign':
-        return simplexLatticeDesign(
+        final simplex = simplexLatticeDesign(
           baseModel: baseModelFull,
           parameterNames: (args['parameterNames'] as List).cast<String>(),
           m: (args['m'] as num).toInt(),
         );
+        _log('[LCA] simplexLatticeDesign produced ${simplex.length} change-list(s)');
+        return simplex;
       case 'distanceOneToMany':
         // Use injected handler if provided, otherwise fall back to the built-in.
         // Never let this tool crash the whole scenario run.
@@ -570,40 +795,470 @@ class LlmScenarioController {
     }
   }
 
-  /// Extracts scenarios object from GPT message
-  Map<String, dynamic> _extractScenariosFromMessage(dynamic message) {
+  bool _isAllowedToolName(String name) {
+    return _allowedToolNames.contains(name.trim());
+  }
+
+  _AssistantPayload _extractAssistantPayloadFromMessage(dynamic message) {
     final content = message['content'];
     if (content is! String) {
       _log('[LCA] Unexpected message content type: ${content.runtimeType}');
-      throw Exception('Unexpected message format: missing string content.');
+      return const _AssistantPayload(
+        abstention: LlmScenarioAbstention(
+          reason:
+              'Model response was not a valid JSON string and execution was blocked.',
+          requiredCapability: 'Strict JSON response from the model',
+        ),
+      );
     }
     final cleaned = _normaliseJsonText(content.trim());
     try {
-      final parsed = jsonDecode(cleaned) as Map<String, dynamic>;
+      final decoded = jsonDecode(cleaned);
+      if (decoded is! Map) {
+        return const _AssistantPayload(
+          abstention: LlmScenarioAbstention(
+            reason: 'Model response must be a JSON object and was blocked.',
+            requiredCapability: 'Schema-compliant JSON object response',
+          ),
+        );
+      }
+      final parsed = decoded.cast<String, dynamic>();
+      final status = (parsed['status'] ?? '').toString().trim().toLowerCase();
+      if (status == 'unsupported') {
+        final abstention = LlmScenarioAbstention(
+          status: 'unsupported',
+          reason: (parsed['reason'] ?? '').toString().trim().isEmpty
+              ? 'The request is unsupported for this parameter-only system.'
+              : (parsed['reason'] ?? '').toString().trim(),
+          requiredCapability:
+              (parsed['required_capability'] ?? '').toString().trim().isEmpty
+                  ? null
+                  : (parsed['required_capability'] ?? '').toString().trim(),
+        );
+        _log(
+          '[LCA] Structured abstention received: ${jsonEncode(abstention.toJson())}',
+        );
+        return _AssistantPayload(abstention: abstention);
+      }
       _log('[LCA] Scenarios JSON parsed successfully');
-      return parsed;
+      return _AssistantPayload(scenariosJson: parsed);
     } on FormatException catch (e) {
       final preview =
           cleaned.length > 200 ? '${cleaned.substring(0, 200)}…' : cleaned;
       _log(
-          '[LCA] Failed to parse scenarios JSON: ${e.message}. Preview: $preview');
-      throw Exception(
-          'Failed to parse scenarios JSON: ${e.message}. Preview: $preview');
+          '[LCA] Failed to parse assistant JSON: ${e.message}. Preview: $preview');
+      return _AssistantPayload(
+        abstention: LlmScenarioAbstention(
+          reason: 'Model returned invalid JSON and execution was blocked.',
+          requiredCapability: 'Strict JSON output in the required schema',
+        ),
+      );
+    } catch (e) {
+      _log('[LCA] Failed to parse assistant payload: $e');
+      return _AssistantPayload(
+        abstention: LlmScenarioAbstention(
+          reason: 'Model output could not be interpreted safely and was blocked.',
+          requiredCapability: 'Schema-compliant response in supported format',
+        ),
+      );
     }
   }
 
-  /// Converts scenarios JSON into rawDeltasByScenario map
-  Map<String, List<Map<String, dynamic>>> _mapChanges(
-      Map<String, dynamic> scenariosJson) {
-    final scenariosMap = scenariosJson['scenarios'] as Map<String, dynamic>;
+  _ValidatedScenarioChanges _mapChangesWithValidation(
+    _AssistantPayload payload, {
+    required Map<String, dynamic> baseModelFull,
+    required List<String> requestedTools,
+  }) {
+    if (payload.abstention != null) {
+      return _ValidatedScenarioChanges(abstention: payload.abstention);
+    }
+
+    final scenariosJson = payload.scenariosJson;
+    if (scenariosJson == null) {
+      return const _ValidatedScenarioChanges(
+        abstention: LlmScenarioAbstention(
+          reason:
+              'Model response did not include scenarios and execution was blocked.',
+          requiredCapability: 'Supported scenario delta output schema',
+        ),
+      );
+    }
+
+    final scenariosAny = scenariosJson['scenarios'];
+    if (scenariosAny is! Map) {
+      return const _ValidatedScenarioChanges(
+        abstention: LlmScenarioAbstention(
+          reason:
+              'Model response must include a "scenarios" object or a structured unsupported abstention.',
+          requiredCapability: 'Supported scenario delta output schema',
+        ),
+      );
+    }
+
+    for (final toolName in requestedTools) {
+      if (_isAllowedToolName(toolName)) continue;
+      return _ValidatedScenarioChanges(
+        abstention: LlmScenarioAbstention(
+          reason:
+              'Tool "$toolName" is not allow-listed and execution was blocked.',
+          requiredCapability: 'Implement and allow-list tool "$toolName"',
+        ),
+      );
+    }
+
+    final index = _buildModelValidationIndex(baseModelFull);
+    final scenariosMap = scenariosAny.cast<dynamic, dynamic>();
     final out = <String, List<Map<String, dynamic>>>{};
-    _log(
-        '[LCA] Mapping scenarios to change lists. Count=${scenariosMap.length}');
-    scenariosMap.forEach((name, data) {
-      final raw = (data['changes'] as List).cast<Map<String, dynamic>>();
-      out[name] = _preferGlobalParameterWhenDuplicate(raw, scenarioName: name);
-    });
-    _log('[LCA] Mapping complete');
+    _log('[LCA] Validating scenarios. Count=${scenariosMap.length}');
+
+    for (final entry in scenariosMap.entries) {
+      final scenarioName = entry.key.toString().trim();
+      if (scenarioName.isEmpty) {
+        return const _ValidatedScenarioChanges(
+          abstention: LlmScenarioAbstention(
+            reason: 'Scenario name cannot be empty.',
+            requiredCapability: 'Valid scenario naming in output schema',
+          ),
+        );
+      }
+
+      final scenarioRaw = entry.value;
+      if (scenarioRaw is! Map) {
+        return _ValidatedScenarioChanges(
+          abstention: LlmScenarioAbstention(
+            reason: 'Scenario "$scenarioName" must be a JSON object.',
+            requiredCapability: 'Valid scenario object in output schema',
+          ),
+        );
+      }
+      final scenarioData = scenarioRaw.cast<String, dynamic>();
+      final changesAny = scenarioData['changes'];
+      if (changesAny is! List) {
+        return _ValidatedScenarioChanges(
+          abstention: LlmScenarioAbstention(
+            reason: 'Scenario "$scenarioName" is missing a valid changes list.',
+            requiredCapability: 'Valid changes list in scenario output',
+          ),
+        );
+      }
+
+      final rawActionBlob = jsonEncode(changesAny);
+      if (_structuralKeywordPattern.hasMatch(rawActionBlob)) {
+        return _ValidatedScenarioChanges(
+          abstention: LlmScenarioAbstention(
+            reason:
+                'Scenario "$scenarioName" includes structural edit keywords, which are unsupported.',
+            requiredCapability:
+                'Structural model-edit capability (process/flow/exchange/dataset edits)',
+          ),
+        );
+      }
+
+      final normalized = <Map<String, dynamic>>[];
+      for (final rawChange in changesAny) {
+        if (rawChange is! Map) {
+          return _ValidatedScenarioChanges(
+            abstention: LlmScenarioAbstention(
+              reason:
+                  'Scenario "$scenarioName" contains a malformed change entry.',
+              requiredCapability: 'Valid change object in output schema',
+            ),
+          );
+        }
+
+        final change = rawChange.cast<String, dynamic>();
+        final field = (change['field'] ?? '').toString().trim();
+        if (field.isEmpty) {
+          return _ValidatedScenarioChanges(
+            abstention: LlmScenarioAbstention(
+              reason:
+                  'Scenario "$scenarioName" contains a change with missing field.',
+              requiredCapability: 'Valid field value in each change',
+            ),
+          );
+        }
+        final newValue = _toFiniteDouble(change['new_value']);
+        if (newValue == null) {
+          return _ValidatedScenarioChanges(
+            abstention: LlmScenarioAbstention(
+              reason:
+                  'Scenario "$scenarioName" has non-numeric new_value for "$field".',
+              requiredCapability: 'Numeric literal new_value for each change',
+            ),
+          );
+        }
+
+        if (field == 'number_functional_units') {
+          normalized.add({
+            'field': 'number_functional_units',
+            'new_value': newValue,
+          });
+          continue;
+        }
+
+        if (field.startsWith('parameters.global.')) {
+          final paramName = field.substring('parameters.global.'.length).trim();
+          if (paramName.isEmpty) {
+            return _ValidatedScenarioChanges(
+              abstention: LlmScenarioAbstention(
+                reason:
+                    'Scenario "$scenarioName" has an invalid global parameter field.',
+                requiredCapability: 'Valid global parameter field syntax',
+              ),
+            );
+          }
+          final key = paramName.toLowerCase();
+          if (!index.globalParamNames.contains(key)) {
+            final scopeReason = index.allProcessParamNames.contains(key)
+                ? 'Parameter "$paramName" is not editable in global scope.'
+                : 'Global parameter "$paramName" does not exist in the loaded model.';
+            return _ValidatedScenarioChanges(
+              abstention: LlmScenarioAbstention(
+                reason: scopeReason,
+                requiredCapability:
+                    'Expose "$paramName" as an editable global parameter',
+              ),
+            );
+          }
+          normalized.add({
+            'field': 'parameters.global.$paramName',
+            'new_value': newValue,
+          });
+          continue;
+        }
+
+        if (field.startsWith('parameters.process.') ||
+            field.startsWith('parameters.process:')) {
+          String processIdRaw = (change['process_id'] ?? '').toString().trim();
+          String processParamName = '';
+
+          if (field.startsWith('parameters.process.')) {
+            processParamName =
+                field.substring('parameters.process.'.length).trim();
+          } else {
+            final rest = field.substring('parameters.process:'.length);
+            final dot = rest.indexOf('.');
+            if (dot <= 0 || dot >= rest.length - 1) {
+              return _ValidatedScenarioChanges(
+                abstention: LlmScenarioAbstention(
+                  reason:
+                      'Scenario "$scenarioName" has malformed process parameter field "$field".',
+                  requiredCapability: 'Valid process parameter field syntax',
+                ),
+              );
+            }
+            processIdRaw = rest.substring(0, dot).trim();
+            processParamName = rest.substring(dot + 1).trim();
+          }
+
+          if (processIdRaw.isEmpty) {
+            return _ValidatedScenarioChanges(
+              abstention: LlmScenarioAbstention(
+                reason:
+                    'Scenario "$scenarioName" process parameter edit "$field" is missing process_id.',
+                requiredCapability: 'Process parameter edits with process_id',
+              ),
+            );
+          }
+          if (processParamName.isEmpty) {
+            return _ValidatedScenarioChanges(
+              abstention: LlmScenarioAbstention(
+                reason:
+                    'Scenario "$scenarioName" has empty process parameter name in "$field".',
+                requiredCapability: 'Valid process parameter field syntax',
+              ),
+            );
+          }
+
+          final resolvedProcessId =
+              _resolveProcessId(processIdRaw, index.processIdByLower);
+          if (resolvedProcessId == null) {
+            return _ValidatedScenarioChanges(
+              abstention: LlmScenarioAbstention(
+                reason:
+                    'Process "$processIdRaw" does not exist in the loaded model.',
+                requiredCapability:
+                    'Valid process_id that exists in the loaded model',
+              ),
+            );
+          }
+
+          final processParamKey = processParamName.toLowerCase();
+          final editableParams =
+              index.processParamNamesById[resolvedProcessId] ?? const <String>{};
+          if (!editableParams.contains(processParamKey)) {
+            final scopeReason = index.globalParamNames.contains(processParamKey)
+                ? 'Parameter "$processParamName" is not editable in process scope.'
+                : index.allProcessParamNames.contains(processParamKey)
+                    ? 'Parameter "$processParamName" is not editable for process "$resolvedProcessId".'
+                    : 'Process parameter "$processParamName" does not exist for process "$resolvedProcessId".';
+            return _ValidatedScenarioChanges(
+              abstention: LlmScenarioAbstention(
+                reason: scopeReason,
+                requiredCapability:
+                    'Expose "$processParamName" as an editable parameter for "$resolvedProcessId"',
+              ),
+            );
+          }
+
+          normalized.add({
+            'process_id': resolvedProcessId,
+            'field': 'parameters.process.$processParamName',
+            'new_value': newValue,
+          });
+          continue;
+        }
+
+        return _ValidatedScenarioChanges(
+          abstention: LlmScenarioAbstention(
+            reason:
+                'Field "$field" is not an allowed edit type. Allowed types are global parameter, process parameter, or number_functional_units.',
+            requiredCapability:
+                'Parameter-only scenario editing in the supported schema',
+          ),
+        );
+      }
+
+      final deduped = _preferGlobalParameterWhenDuplicate(
+        normalized,
+        scenarioName: scenarioName,
+      );
+      final finalActionBlob = jsonEncode(deduped);
+      if (_structuralKeywordPattern.hasMatch(finalActionBlob)) {
+        return _ValidatedScenarioChanges(
+          abstention: LlmScenarioAbstention(
+            reason:
+                'Scenario "$scenarioName" includes structural edit content after parsing and was blocked.',
+            requiredCapability:
+                'Structural model-edit capability (process/flow/exchange/dataset edits)',
+          ),
+        );
+      }
+      out[scenarioName] = deduped;
+    }
+
+    _log('[LCA] Validation and mapping complete');
+    return _ValidatedScenarioChanges(rawDeltasByScenario: out);
+  }
+
+  _ModelValidationIndex _buildModelValidationIndex(
+    Map<String, dynamic> baseModelFull,
+  ) {
+    final parameterSet = _readParameterSetForValidation(baseModelFull);
+    final globalParamNames = <String>{
+      for (final p in parameterSet.global)
+        if (p.name.trim().isNotEmpty) p.name.trim().toLowerCase(),
+    };
+    final processParamNamesById = <String, Set<String>>{};
+    final processIdByLower = <String, String>{};
+    final allProcessParamNames = <String>{};
+
+    final rawProcesses = baseModelFull['processes'];
+    if (rawProcesses is List) {
+      for (final rawProcess in rawProcesses) {
+        if (rawProcess is! Map) continue;
+        final process = rawProcess.cast<String, dynamic>();
+        final pid = (process['id'] ?? '').toString().trim();
+        if (pid.isEmpty) continue;
+        processIdByLower[pid.toLowerCase()] = pid;
+        final names = processParamNamesById.putIfAbsent(pid, () => <String>{});
+
+        for (final p in parameterSet.processParamsFor(pid)) {
+          final key = p.name.trim().toLowerCase();
+          if (key.isEmpty) continue;
+          names.add(key);
+          allProcessParamNames.add(key);
+        }
+
+        final inlineParams = process['parameters'];
+        if (inlineParams is List) {
+          for (final paramRaw in inlineParams) {
+            if (paramRaw is! Map) continue;
+            final name = (paramRaw['name'] ?? '').toString().trim().toLowerCase();
+            if (name.isEmpty) continue;
+            names.add(name);
+            allProcessParamNames.add(name);
+          }
+        }
+      }
+    }
+
+    for (final entry in parameterSet.perProcess.entries) {
+      final pid = entry.key.trim();
+      if (pid.isEmpty) continue;
+      processIdByLower.putIfAbsent(pid.toLowerCase(), () => pid);
+      final names = processParamNamesById.putIfAbsent(pid, () => <String>{});
+      for (final p in entry.value) {
+        final key = p.name.trim().toLowerCase();
+        if (key.isEmpty) continue;
+        names.add(key);
+        allProcessParamNames.add(key);
+      }
+    }
+
+    return _ModelValidationIndex(
+      globalParamNames: globalParamNames,
+      processParamNamesById: processParamNamesById,
+      processIdByLower: processIdByLower,
+      allProcessParamNames: allProcessParamNames,
+    );
+  }
+
+  ParameterSet _readParameterSetForValidation(Map<String, dynamic> model) {
+    final params = model['parameters'];
+    if (params is Map) {
+      return ParameterSet.fromJson(params.cast<String, dynamic>());
+    }
+
+    final fallback = <String, dynamic>{};
+    final globals = model['global_parameters'];
+    if (globals is List) {
+      fallback['global_parameters'] = globals;
+    }
+    final process = model['process_parameters'];
+    if (process is Map) {
+      fallback['process_parameters'] = process;
+    }
+    if (fallback.isNotEmpty) {
+      return ParameterSet.fromJson(fallback);
+    }
+
+    final perProcess = <String, List<Parameter>>{};
+    final rawProcesses = model['processes'];
+    if (rawProcesses is List) {
+      for (final raw in rawProcesses) {
+        if (raw is! Map) continue;
+        final processMap = raw.cast<String, dynamic>();
+        final pid = (processMap['id'] ?? '').toString().trim();
+        if (pid.isEmpty) continue;
+        final rawParams = processMap['parameters'];
+        if (rawParams is! List) continue;
+        final parsed = rawParams
+            .whereType<Map>()
+            .map((p) => Parameter.fromJson(p.cast<String, dynamic>()))
+            .toList();
+        if (parsed.isNotEmpty) {
+          perProcess[pid] = parsed;
+        }
+      }
+    }
+    return ParameterSet(perProcess: perProcess);
+  }
+
+  String? _resolveProcessId(String raw, Map<String, String> processIdByLower) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+    return processIdByLower[trimmed.toLowerCase()];
+  }
+
+  double? _toFiniteDouble(dynamic value) {
+    double? out;
+    if (value is num) {
+      out = value.toDouble();
+    } else if (value is String) {
+      out = double.tryParse(value.trim());
+    }
+    if (out == null || out.isNaN || out.isInfinite) return null;
     return out;
   }
 
@@ -683,9 +1338,45 @@ class LlmScenarioController {
 class _ParsedLLMOutput {
   final List<String> functionsUsed;
   final Map<String, List<Map<String, dynamic>>> rawDeltasByScenario;
+  final LlmScenarioAbstention? abstention;
 
   _ParsedLLMOutput({
     required this.functionsUsed,
     required this.rawDeltasByScenario,
+    this.abstention,
+  });
+}
+
+class _AssistantPayload {
+  final Map<String, dynamic>? scenariosJson;
+  final LlmScenarioAbstention? abstention;
+
+  const _AssistantPayload({
+    this.scenariosJson,
+    this.abstention,
+  });
+}
+
+class _ValidatedScenarioChanges {
+  final Map<String, List<Map<String, dynamic>>>? rawDeltasByScenario;
+  final LlmScenarioAbstention? abstention;
+
+  const _ValidatedScenarioChanges({
+    this.rawDeltasByScenario,
+    this.abstention,
+  });
+}
+
+class _ModelValidationIndex {
+  final Set<String> globalParamNames;
+  final Map<String, Set<String>> processParamNamesById;
+  final Map<String, String> processIdByLower;
+  final Set<String> allProcessParamNames;
+
+  const _ModelValidationIndex({
+    required this.globalParamNames,
+    required this.processParamNamesById,
+    required this.processIdByLower,
+    required this.allProcessParamNames,
   });
 }
