@@ -1,7 +1,9 @@
 import 'dart:typed_data';
 
+import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 
 /// Builds a professional PDF report for LLM scenarios and LCA outputs.
 class ReportExporter {
@@ -21,7 +23,18 @@ class ReportExporter {
   }) async {
     final createdAt = generatedAt ?? DateTime.now();
     final parsed = _ParsedLca.fromRaw(lcaResults);
+    final fontBundle = await _PdfFontBundle.load(
+      _collectTextSamples(
+        prompt: prompt,
+        functionsUsed: functionsUsed,
+        rawDeltasByScenario: rawDeltasByScenario,
+        parsed: parsed,
+        productSystemName: productSystemName,
+        impactMethodName: impactMethodName,
+      ),
+    );
     final doc = pw.Document(
+      theme: fontBundle.theme,
       title: _reportTitle,
       author: 'EarlyLCA',
       creator: 'EarlyLCA LLM Scenario Generator',
@@ -226,6 +239,54 @@ class ReportExporter {
     }
 
     return doc.save();
+  }
+
+  static Iterable<String> _collectTextSamples({
+    required String prompt,
+    required List<String> functionsUsed,
+    required Map<String, List<Map<String, dynamic>>> rawDeltasByScenario,
+    required _ParsedLca parsed,
+    String? productSystemName,
+    String? impactMethodName,
+  }) sync* {
+    yield prompt;
+    for (final fn in functionsUsed) {
+      yield fn;
+    }
+    if (productSystemName != null) {
+      yield productSystemName;
+    }
+    if (impactMethodName != null) {
+      yield impactMethodName;
+    }
+
+    for (final entry in rawDeltasByScenario.entries) {
+      yield entry.key;
+      for (final change in entry.value) {
+        for (final value in change.values) {
+          final text = value?.toString();
+          if (text == null || text.isEmpty) continue;
+          yield text;
+        }
+      }
+    }
+
+    for (final method in parsed.methodNames) {
+      yield method;
+      final unit = parsed.methodUnits[method];
+      if (unit != null && unit.trim().isNotEmpty) {
+        yield unit;
+      }
+    }
+    for (final scenario in parsed.scenarios) {
+      yield scenario.name;
+      if (scenario.error != null) {
+        yield scenario.error!;
+      }
+      for (final warning in scenario.warnings) {
+        yield warning;
+      }
+    }
   }
 
   static pw.TableRow _kvRow(String k, String v) {
@@ -572,6 +633,250 @@ class ReportExporter {
     final cleaned = unit?.trim() ?? '';
     if (cleaned.isEmpty) return method;
     return '$method ($cleaned)';
+  }
+}
+
+class _PdfFontBundle {
+  final pw.ThemeData theme;
+
+  const _PdfFontBundle({required this.theme});
+
+  static final Map<String, Future<_PdfFontBundle>> _cache = {};
+
+  static Future<_PdfFontBundle> load(Iterable<String> textSamples) {
+    final coverage = _ScriptCoverage.detect(textSamples);
+    final key = coverage.cacheKey;
+    return _cache.putIfAbsent(key, () => _build(coverage));
+  }
+
+  static Future<_PdfFontBundle> _build(_ScriptCoverage coverage) async {
+    final base = await _loadAssetOrGoogle(
+          assetPath: 'assets/fonts/NotoSans-Regular.ttf',
+          googleLoader: PdfGoogleFonts.notoSansRegular,
+        ) ??
+        pw.Font.helvetica();
+    final bold = await _loadAssetOrGoogle(
+          assetPath: 'assets/fonts/NotoSans-Bold.ttf',
+          googleLoader: PdfGoogleFonts.notoSansBold,
+        ) ??
+        pw.Font.helveticaBold();
+    final italic = await _loadAssetOrGoogle(
+          assetPath: 'assets/fonts/NotoSans-Italic.ttf',
+          googleLoader: PdfGoogleFonts.notoSansItalic,
+        ) ??
+        pw.Font.helveticaOblique();
+    final boldItalic = await _loadAssetOrGoogle(
+          assetPath: 'assets/fonts/NotoSans-BoldItalic.ttf',
+          googleLoader: PdfGoogleFonts.notoSansBoldItalic,
+        ) ??
+        pw.Font.helveticaBoldOblique();
+    final icons = await _loadAssetOrGoogle(
+      assetPath: 'assets/fonts/MaterialIcons-Regular.otf',
+      googleLoader: PdfGoogleFonts.materialIcons,
+    );
+
+    final fallbackLoads = <Future<pw.Font?>>[
+      _loadAssetOrGoogle(
+        assetPath: 'assets/fonts/NotoSansMath-Regular.ttf',
+        googleLoader: PdfGoogleFonts.notoSansMathRegular,
+      ),
+      _loadAssetOrGoogle(
+        assetPath: 'assets/fonts/NotoSansSymbols2-Regular.ttf',
+        googleLoader: PdfGoogleFonts.notoSansSymbols2Regular,
+      ),
+      if (coverage.hasArabic)
+        _loadAssetOrGoogle(
+          assetPath: 'assets/fonts/NotoSansArabic-Regular.ttf',
+          googleLoader: PdfGoogleFonts.notoSansArabicRegular,
+        ),
+      if (coverage.hasDevanagari)
+        _loadAssetOrGoogle(
+          assetPath: 'assets/fonts/NotoSansDevanagari-Regular.ttf',
+          googleLoader: PdfGoogleFonts.notoSansDevanagariRegular,
+        ),
+      if (coverage.hasHebrew)
+        _loadAssetOrGoogle(
+          assetPath: 'assets/fonts/NotoSansHebrew-Regular.ttf',
+          googleLoader: PdfGoogleFonts.notoSansHebrewRegular,
+        ),
+      if (coverage.hasThai)
+        _loadAssetOrGoogle(
+          assetPath: 'assets/fonts/NotoSansThai-Regular.ttf',
+          googleLoader: PdfGoogleFonts.notoSansThaiRegular,
+        ),
+      if (coverage.hasCjk)
+        _loadAssetOrGoogle(
+          assetPath: 'assets/fonts/NotoSansSC-Regular.ttf',
+          googleLoader: PdfGoogleFonts.notoSansSCRegular,
+        ),
+      if (coverage.hasKana)
+        _loadAssetOrGoogle(
+          assetPath: 'assets/fonts/NotoSansJP-Regular.ttf',
+          googleLoader: PdfGoogleFonts.notoSansJPRegular,
+        ),
+      if (coverage.hasHangul)
+        _loadAssetOrGoogle(
+          assetPath: 'assets/fonts/NotoSansKR-Regular.ttf',
+          googleLoader: PdfGoogleFonts.notoSansKRRegular,
+        ),
+      if (coverage.hasEmoji)
+        _loadAssetOrGoogle(
+          assetPath: 'assets/fonts/NotoColorEmoji-Regular.ttf',
+          googleLoader: PdfGoogleFonts.notoColorEmojiRegular,
+        ),
+    ];
+    final loadedFallbacks = await Future.wait(fallbackLoads);
+    final fallbacks = <pw.Font>[
+      for (final font in loadedFallbacks)
+        if (font != null) font,
+    ];
+
+    return _PdfFontBundle(
+      theme: pw.ThemeData.withFont(
+        base: base,
+        bold: bold,
+        italic: italic,
+        boldItalic: boldItalic,
+        icons: icons ?? base,
+        fontFallback: fallbacks,
+      ),
+    );
+  }
+
+  static Future<pw.Font?> _tryLoad(Future<pw.Font> Function() loader) async {
+    try {
+      return await loader();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<pw.Font?> _loadAssetFont(String assetPath) async {
+    try {
+      final bytes = await rootBundle.load(assetPath);
+      return pw.Font.ttf(bytes);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<pw.Font?> _loadAssetOrGoogle({
+    required String assetPath,
+    required Future<pw.Font> Function() googleLoader,
+  }) async {
+    final local = await _loadAssetFont(assetPath);
+    if (local != null) return local;
+    return _tryLoad(googleLoader);
+  }
+}
+
+class _ScriptCoverage {
+  final bool hasArabic;
+  final bool hasCjk;
+  final bool hasDevanagari;
+  final bool hasEmoji;
+  final bool hasHangul;
+  final bool hasHebrew;
+  final bool hasKana;
+  final bool hasThai;
+
+  const _ScriptCoverage({
+    required this.hasArabic,
+    required this.hasCjk,
+    required this.hasDevanagari,
+    required this.hasEmoji,
+    required this.hasHangul,
+    required this.hasHebrew,
+    required this.hasKana,
+    required this.hasThai,
+  });
+
+  String get cacheKey => [
+        hasArabic ? 'a1' : 'a0',
+        hasCjk ? 'c1' : 'c0',
+        hasDevanagari ? 'd1' : 'd0',
+        hasEmoji ? 'e1' : 'e0',
+        hasHangul ? 'h1' : 'h0',
+        hasHebrew ? 'he1' : 'he0',
+        hasKana ? 'k1' : 'k0',
+        hasThai ? 't1' : 't0',
+      ].join('-');
+
+  static _ScriptCoverage detect(Iterable<String> textSamples) {
+    var hasArabic = false;
+    var hasCjk = false;
+    var hasDevanagari = false;
+    var hasEmoji = false;
+    var hasHangul = false;
+    var hasHebrew = false;
+    var hasKana = false;
+    var hasThai = false;
+
+    for (final text in textSamples) {
+      for (final rune in text.runes) {
+        if (!hasArabic &&
+            ((rune >= 0x0600 && rune <= 0x06FF) ||
+                (rune >= 0x0750 && rune <= 0x077F) ||
+                (rune >= 0x08A0 && rune <= 0x08FF))) {
+          hasArabic = true;
+          continue;
+        }
+        if (!hasDevanagari && rune >= 0x0900 && rune <= 0x097F) {
+          hasDevanagari = true;
+          continue;
+        }
+        if (!hasHebrew && rune >= 0x0590 && rune <= 0x05FF) {
+          hasHebrew = true;
+          continue;
+        }
+        if (!hasThai && rune >= 0x0E00 && rune <= 0x0E7F) {
+          hasThai = true;
+          continue;
+        }
+        if (!hasKana &&
+            ((rune >= 0x3040 && rune <= 0x309F) ||
+                (rune >= 0x30A0 && rune <= 0x30FF) ||
+                (rune >= 0x31F0 && rune <= 0x31FF))) {
+          hasKana = true;
+          continue;
+        }
+        if (!hasHangul &&
+            ((rune >= 0x1100 && rune <= 0x11FF) ||
+                (rune >= 0x3130 && rune <= 0x318F) ||
+                (rune >= 0xAC00 && rune <= 0xD7AF))) {
+          hasHangul = true;
+          continue;
+        }
+        if (!hasCjk &&
+            ((rune >= 0x3400 && rune <= 0x4DBF) ||
+                (rune >= 0x4E00 && rune <= 0x9FFF) ||
+                (rune >= 0xF900 && rune <= 0xFAFF) ||
+                (rune >= 0x20000 && rune <= 0x2A6DF))) {
+          hasCjk = true;
+          continue;
+        }
+        if (!hasEmoji && _isEmojiRune(rune)) {
+          hasEmoji = true;
+        }
+      }
+    }
+
+    return _ScriptCoverage(
+      hasArabic: hasArabic,
+      hasCjk: hasCjk,
+      hasDevanagari: hasDevanagari,
+      hasEmoji: hasEmoji,
+      hasHangul: hasHangul,
+      hasHebrew: hasHebrew,
+      hasKana: hasKana,
+      hasThai: hasThai,
+    );
+  }
+
+  static bool _isEmojiRune(int rune) {
+    return (rune >= 0x1F300 && rune <= 0x1FAFF) ||
+        (rune >= 0x2600 && rune <= 0x27BF) ||
+        (rune >= 0xFE00 && rune <= 0xFE0F);
   }
 }
 

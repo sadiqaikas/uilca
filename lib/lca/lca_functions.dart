@@ -1020,7 +1020,7 @@ List<List<Map<String, dynamic>>> fullSystemUncertainty({
 /// 3) Simplex-Lattice Mixture Design on parameters
 ///
 /// Redistribute the combined total of the selected parameter names according to a {q, m}
-/// simplex-lattice design, where q = parameterNames.length and each component takes values
+/// simplex-lattice design, where q is the count of valid, resolved parameter names and each component takes values
 /// in {0, 1/m, …, 1} with the sum equal to 1. For each lattice point:
 ///   - Compute the target total for each parameter name: totalBaseline * (ci / m)
 ///   - Scale every occurrence of that parameter name (global and per-process) by the same factor
@@ -1032,18 +1032,34 @@ List<List<Map<String, dynamic>>> simplexLatticeDesign({
   required List<String> parameterNames,
   required int m,
 }) {
+  if (m <= 0) {
+    throw ArgumentError('simplexLatticeDesign requires m >= 1. Received m=$m.');
+  }
+
   final params = (baseModel['parameters'] as Map?) ?? const {};
   final globals = (params['global_parameters'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
   final procParams =
       (params['process_parameters'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
   final resolved = _resolveParameterSymbols(params.cast<String, dynamic>());
 
-  final int q = parameterNames.length;
+  // Normalise: trim, remove empties, dedupe case-insensitively.
+  final seenKeys = <String>{};
+  final requestedNames = <String>[];
+  for (final raw in parameterNames) {
+    final name = raw.trim();
+    if (name.isEmpty) continue;
+    final key = name.toLowerCase();
+    if (seenKeys.add(key)) {
+      requestedNames.add(name);
+    }
+  }
 
-  // Gather occurrences and baseline totals for each requested name
+  // Gather occurrences and baseline totals for each requested name.
+  // Keep only names that actually resolve in the model and have positive totals.
+  final activeNames = <String>[];
   final Map<String, _ParamOccurrences> occByName = {};
   final Map<String, double> totalByName = {};
-  for (final name in parameterNames) {
+  for (final name in requestedNames) {
     final occ = _collectOccurrencesForName(
       name,
       globals,
@@ -1052,12 +1068,28 @@ List<List<Map<String, dynamic>>> simplexLatticeDesign({
       processSymbols: resolved.processById,
     );
     occByName[name] = occ;
-    totalByName[name] = occ.sum();
+    final total = occ.sum();
+    totalByName[name] = total;
+    if (!occ.isEmpty && total > 0.0 && total.isFinite) {
+      activeNames.add(name);
+    }
+  }
+  final int q = activeNames.length;
+  if (q == 0) {
+    return const <List<Map<String, dynamic>>>[];
+  }
+
+  final pointCountEstimate = _estimateSimplexPointCount(q: q, m: m);
+  if (pointCountEstimate > _maxSimplexLatticePoints) {
+    throw ArgumentError(
+      'simplexLatticeDesign would generate $pointCountEstimate lattice points '
+      '(limit=$_maxSimplexLatticePoints). Reduce m or the number of selected parameters.',
+    );
   }
 
   // Sum of all selected names
   final double grandTotal =
-      totalByName.values.fold(0.0, (a, b) => a + (b.isNaN ? 0.0 : b));
+      activeNames.fold(0.0, (a, n) => a + (totalByName[n] ?? 0.0));
   if (grandTotal <= 0.0) {
     // Nothing to mix
     return const <List<Map<String, dynamic>>>[];
@@ -1083,13 +1115,13 @@ List<List<Map<String, dynamic>>> simplexLatticeDesign({
   for (final combo in combos) {
     final Map<String, double> targetTotals = {};
     for (int k = 0; k < q; k++) {
-      final name = parameterNames[k];
+      final name = activeNames[k];
       targetTotals[name] = grandTotal * (combo[k] / m);
     }
 
     final List<Map<String, dynamic>> changeList = [];
 
-    for (final name in parameterNames) {
+    for (final name in activeNames) {
       final occ = occByName[name]!;
       final double baseTotal = totalByName[name]!;
       if (baseTotal <= 0.0) {
@@ -1121,6 +1153,27 @@ List<List<Map<String, dynamic>>> simplexLatticeDesign({
 }
 
 /// ===== Helpers ================================================================================
+
+const int _maxSimplexLatticePoints = 1200;
+
+int _estimateSimplexPointCount({
+  required int q,
+  required int m,
+}) {
+  if (q <= 0 || m < 0) return 0;
+  if (q == 1) return 1;
+
+  // Number of integer solutions to c1 + ... + cq = m is C(m+q-1, q-1).
+  int n = m + q - 1;
+  int k = q - 1;
+  if (k > n - k) k = n - k;
+
+  int out = 1;
+  for (int i = 1; i <= k; i++) {
+    out = (out * (n - k + i)) ~/ i;
+  }
+  return out;
+}
 
 double _round6(double x) => double.parse(x.toStringAsFixed(6));
 
