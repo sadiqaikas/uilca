@@ -2,10 +2,11 @@
 
 import 'dart:html' as html;
 
-const _storageKey = 'earlylca.openai_api_key';
+const _openAiStorageKey = 'earlylca.openai_api_key';
+const _togetherStorageKey = 'earlylca.together_api_key';
 
 Future<String?> loadStoredOpenAiApiKey() async {
-  final raw = html.window.localStorage[_storageKey];
+  final raw = html.window.localStorage[_openAiStorageKey];
   if (raw == null) return null;
   final trimmed = raw.trim();
   if (trimmed.isEmpty) return null;
@@ -13,9 +14,25 @@ Future<String?> loadStoredOpenAiApiKey() async {
 }
 
 Future<void> saveStoredOpenAiApiKey(String key) async {
-  html.window.localStorage[_storageKey] = key;
+  html.window.localStorage[_openAiStorageKey] = key;
 }
 
 Future<void> clearStoredOpenAiApiKey() async {
-  html.window.localStorage.remove(_storageKey);
+  html.window.localStorage.remove(_openAiStorageKey);
+}
+
+Future<String?> loadStoredTogetherApiKey() async {
+  final raw = html.window.localStorage[_togetherStorageKey];
+  if (raw == null) return null;
+  final trimmed = raw.trim();
+  if (trimmed.isEmpty) return null;
+  return trimmed;
+}
+
+Future<void> saveStoredTogetherApiKey(String key) async {
+  html.window.localStorage[_togetherStorageKey] = key;
+}
+
+Future<void> clearStoredTogetherApiKey() async {
+  html.window.localStorage.remove(_togetherStorageKey);
 }

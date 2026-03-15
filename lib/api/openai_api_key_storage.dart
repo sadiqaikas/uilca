@@ -8,3 +8,12 @@ Future<void> saveStoredOpenAiApiKey(String key) =>
     key_storage.saveStoredOpenAiApiKey(key);
 
 Future<void> clearStoredOpenAiApiKey() => key_storage.clearStoredOpenAiApiKey();
+
+Future<String?> loadStoredTogetherApiKey() =>
+    key_storage.loadStoredTogetherApiKey();
+
+Future<void> saveStoredTogetherApiKey(String key) =>
+    key_storage.saveStoredTogetherApiKey(key);
+
+Future<void> clearStoredTogetherApiKey() =>
+    key_storage.clearStoredTogetherApiKey();

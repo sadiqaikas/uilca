@@ -19,10 +19,27 @@ class ReportExporter {
     Map<String, dynamic>? lcaResults,
     String? productSystemName,
     String? impactMethodName,
+    Map<String, String> scenarioModelByName = const <String, String>{},
+    String? generationRouteLabel,
+    Map<String, Map<String, dynamic>> generationByModel =
+        const <String, Map<String, dynamic>>{},
     DateTime? generatedAt,
   }) async {
     final createdAt = generatedAt ?? DateTime.now();
-    final parsed = _ParsedLca.fromRaw(lcaResults);
+    final parsed = _ParsedLca.fromRaw(
+      lcaResults,
+      scenarioModelByName: scenarioModelByName,
+    );
+    final modelNames = scenarioModelByName.values
+        .map((m) => m.trim())
+        .where((m) => m.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final generationRows = _normalizeGenerationRows(generationByModel);
+    final generationFailures = generationRows
+        .where((row) => row.status.toLowerCase() != 'success')
+        .length;
     final fontBundle = await _PdfFontBundle.load(
       _collectTextSamples(
         prompt: prompt,
@@ -31,6 +48,9 @@ class ReportExporter {
         parsed: parsed,
         productSystemName: productSystemName,
         impactMethodName: impactMethodName,
+        scenarioModelByName: scenarioModelByName,
+        generationRouteLabel: generationRouteLabel,
+        generationByModel: generationByModel,
       ),
     );
     final doc = pw.Document(
@@ -76,6 +96,14 @@ class ReportExporter {
               _metricCard('Total Changes', '$totalChanges'),
               pw.SizedBox(width: 10),
               _metricCard('Impact Methods', '${parsed.methodNames.length}'),
+              if (modelNames.isNotEmpty) ...[
+                pw.SizedBox(width: 10),
+                _metricCard('Models', '${modelNames.length}'),
+              ],
+              if (generationRows.isNotEmpty) ...[
+                pw.SizedBox(width: 10),
+                _metricCard('LLM Failures', '$generationFailures'),
+              ],
             ],
           ),
           pw.SizedBox(height: 16),
@@ -103,6 +131,17 @@ class ReportExporter {
             children: [
               _kvRow('Functions used',
                   functionsUsed.isEmpty ? 'None' : functionsUsed.join(', ')),
+              _kvRow(
+                'Generation route',
+                _fallback(
+                  generationRouteLabel,
+                  modelNames.length > 1 ? 'Multi-model run' : 'Single model run',
+                ),
+              ),
+              _kvRow(
+                'Models in report',
+                modelNames.isEmpty ? 'Not annotated' : modelNames.join(', '),
+              ),
               _kvRow('Product system',
                   _fallback(productSystemName, 'Not selected')),
               _kvRow(
@@ -122,18 +161,34 @@ class ReportExporter {
             ],
           ),
           pw.SizedBox(height: 14),
+          pw.Text('LLM Generation Status', style: h2),
+          pw.SizedBox(height: 6),
+          _buildGenerationStatusTable(generationRows, mono),
+          pw.SizedBox(height: 14),
           pw.Text('Scenario Change Summary', style: h2),
           pw.SizedBox(height: 6),
-          _buildChangeSummaryTable(rawDeltasByScenario, mono),
+          _buildChangeSummaryTable(
+            rawDeltasByScenario,
+            mono,
+            scenarioModelByName: scenarioModelByName,
+          ),
           pw.SizedBox(height: 14),
           pw.Text('Detailed Scenario Changes', style: h2),
           pw.SizedBox(height: 6),
-          ..._buildDetailedChangeTables(rawDeltasByScenario, mono),
+          ..._buildDetailedChangeTables(
+            rawDeltasByScenario,
+            mono,
+            scenarioModelByName: scenarioModelByName,
+          ),
           if (parsed.scenarios.isNotEmpty) ...[
             pw.SizedBox(height: 14),
             pw.Text('LCA Result Status', style: h2),
             pw.SizedBox(height: 6),
-            _buildLcaStatusTable(parsed, mono),
+            _buildLcaStatusTable(
+              parsed,
+              mono,
+              includeModelColumn: modelNames.isNotEmpty,
+            ),
             pw.SizedBox(height: 14),
             pw.Text('Impact Score Matrix', style: h2),
             pw.SizedBox(height: 6),
@@ -248,8 +303,14 @@ class ReportExporter {
     required _ParsedLca parsed,
     String? productSystemName,
     String? impactMethodName,
+    required Map<String, String> scenarioModelByName,
+    String? generationRouteLabel,
+    required Map<String, Map<String, dynamic>> generationByModel,
   }) sync* {
     yield prompt;
+    if (generationRouteLabel != null) {
+      yield generationRouteLabel;
+    }
     for (final fn in functionsUsed) {
       yield fn;
     }
@@ -259,9 +320,21 @@ class ReportExporter {
     if (impactMethodName != null) {
       yield impactMethodName;
     }
+    for (final entry in generationByModel.entries) {
+      yield entry.key;
+      for (final value in entry.value.values) {
+        final text = value?.toString();
+        if (text == null || text.isEmpty) continue;
+        yield text;
+      }
+    }
 
     for (final entry in rawDeltasByScenario.entries) {
       yield entry.key;
+      final model = scenarioModelByName[entry.key];
+      if (model != null && model.trim().isNotEmpty) {
+        yield model;
+      }
       for (final change in entry.value) {
         for (final value in change.values) {
           final text = value?.toString();
@@ -346,43 +419,134 @@ class ReportExporter {
   static pw.Widget _buildChangeSummaryTable(
     Map<String, List<Map<String, dynamic>>> rawDeltasByScenario,
     pw.TextStyle mono,
+    {required Map<String, String> scenarioModelByName}
   ) {
     final sorted = rawDeltasByScenario.entries.toList()
       ..sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase()));
+    final includeModel = scenarioModelByName.isNotEmpty;
+    final headers = <String>[
+      'Scenario',
+      if (includeModel) 'Model',
+      'Number of changes',
+    ];
     return pw.TableHelper.fromTextArray(
       headerDecoration: const pw.BoxDecoration(color: PdfColors.grey300),
       headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
       cellStyle: mono,
       border: pw.TableBorder.all(color: PdfColors.grey500, width: 0.5),
-      headers: const ['Scenario', 'Number of changes'],
+      headers: headers,
       data: sorted
           .map(
             (e) => <String>[
               e.key,
+              if (includeModel) _fallback(scenarioModelByName[e.key], '—'),
               e.value.length.toString(),
             ],
           )
           .toList(),
+      columnWidths: includeModel
+          ? const {
+              0: pw.FlexColumnWidth(3),
+              1: pw.FlexColumnWidth(3),
+              2: pw.FlexColumnWidth(2),
+            }
+          : const {
+              0: pw.FlexColumnWidth(4),
+              1: pw.FlexColumnWidth(2),
+            },
+    );
+  }
+
+  static pw.Widget _buildGenerationStatusTable(
+    List<_GenerationStatusRow> rows,
+    pw.TextStyle mono,
+  ) {
+    if (rows.isEmpty) {
+      return pw.Text(
+        'No model-level generation status metadata was captured.',
+        style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+      );
+    }
+    return pw.TableHelper.fromTextArray(
+      headerDecoration: const pw.BoxDecoration(color: PdfColors.grey300),
+      headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9),
+      cellStyle: mono,
+      border: pw.TableBorder.all(color: PdfColors.grey500, width: 0.5),
+      headers: const [
+        'Model',
+        'Status',
+        'Scenarios',
+        'Reason / Error',
+      ],
+      data: rows
+          .map(
+            (row) => <String>[
+              row.model,
+              row.status,
+              row.scenarioCount.toString(),
+              row.detail.isEmpty ? '-' : row.detail,
+            ],
+          )
+          .toList(),
       columnWidths: const {
-        0: pw.FlexColumnWidth(4),
-        1: pw.FlexColumnWidth(2),
+        0: pw.FlexColumnWidth(3),
+        1: pw.FlexColumnWidth(1),
+        2: pw.FlexColumnWidth(1),
+        3: pw.FlexColumnWidth(5),
       },
     );
+  }
+
+  static List<_GenerationStatusRow> _normalizeGenerationRows(
+    Map<String, Map<String, dynamic>> generationByModel,
+  ) {
+    final rows = <_GenerationStatusRow>[];
+    final modelNames = generationByModel.keys.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    for (final model in modelNames) {
+      final raw = generationByModel[model] ?? const <String, dynamic>{};
+      final status = (raw['status'] ?? 'unknown').toString().trim();
+      final scenarioCount = _toInt(raw['scenario_count']);
+      final reason = (raw['reason'] ?? '').toString().trim();
+      final error = (raw['error'] ?? '').toString().trim();
+      final requiredCapability =
+          (raw['required_capability'] ?? '').toString().trim();
+      final detailParts = <String>[
+        if (reason.isNotEmpty) reason,
+        if (error.isNotEmpty) error,
+        if (requiredCapability.isNotEmpty)
+          'required_capability: $requiredCapability',
+      ];
+      rows.add(
+        _GenerationStatusRow(
+          model: model,
+          status: status.isEmpty ? 'unknown' : status,
+          scenarioCount: scenarioCount,
+          detail: detailParts.join(' | '),
+        ),
+      );
+    }
+    return rows;
   }
 
   static List<pw.Widget> _buildDetailedChangeTables(
     Map<String, List<Map<String, dynamic>>> rawDeltasByScenario,
     pw.TextStyle mono,
+    {required Map<String, String> scenarioModelByName}
   ) {
     final sorted = rawDeltasByScenario.entries.toList()
       ..sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase()));
     final out = <pw.Widget>[];
     for (final entry in sorted) {
+      final modelName = scenarioModelByName[entry.key];
+      final headerText = (modelName == null || modelName.trim().isEmpty)
+          ? entry.key
+          : '${entry.key}  (${modelName.trim()})';
       out.add(
         pw.Padding(
           padding: const pw.EdgeInsets.only(bottom: 4),
           child: pw.Text(
-            entry.key,
+            headerText,
             style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold),
           ),
         ),
@@ -435,27 +599,49 @@ class ReportExporter {
   static pw.Widget _buildLcaStatusTable(
     _ParsedLca parsed,
     pw.TextStyle mono,
+    {required bool includeModelColumn}
   ) {
+    final headers = <String>[
+      'Scenario',
+      if (includeModelColumn) 'Model',
+      'Status',
+      'Methods',
+      'Warnings/Error',
+    ];
     return pw.TableHelper.fromTextArray(
       headerDecoration: const pw.BoxDecoration(color: PdfColors.grey300),
       headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9),
       cellStyle: mono,
       border: pw.TableBorder.all(color: PdfColors.grey500, width: 0.5),
-      headers: const ['Scenario', 'Status', 'Methods', 'Warnings/Error'],
+      headers: headers,
       data: parsed.scenarios.map((s) {
         final status = s.success ? 'Success' : 'Failed';
         final methodCount = s.scores.length.toString();
         final detail = s.success
             ? (s.warnings.isEmpty ? '-' : s.warnings.join(' | '))
             : _fallback(s.error, 'Unknown error');
-        return <String>[s.name, status, methodCount, detail];
+        return <String>[
+          s.name,
+          if (includeModelColumn) _fallback(s.modelName, '—'),
+          status,
+          methodCount,
+          detail,
+        ];
       }).toList(),
-      columnWidths: const {
-        0: pw.FlexColumnWidth(2),
-        1: pw.FlexColumnWidth(1),
-        2: pw.FlexColumnWidth(1),
-        3: pw.FlexColumnWidth(4),
-      },
+      columnWidths: includeModelColumn
+          ? const {
+              0: pw.FlexColumnWidth(2),
+              1: pw.FlexColumnWidth(2),
+              2: pw.FlexColumnWidth(1),
+              3: pw.FlexColumnWidth(1),
+              4: pw.FlexColumnWidth(4),
+            }
+          : const {
+              0: pw.FlexColumnWidth(2),
+              1: pw.FlexColumnWidth(1),
+              2: pw.FlexColumnWidth(1),
+              3: pw.FlexColumnWidth(4),
+            },
     );
   }
 
@@ -634,6 +820,27 @@ class ReportExporter {
     if (cleaned.isEmpty) return method;
     return '$method ($cleaned)';
   }
+
+  static int _toInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value.trim()) ?? 0;
+    return 0;
+  }
+}
+
+class _GenerationStatusRow {
+  final String model;
+  final String status;
+  final int scenarioCount;
+  final String detail;
+
+  const _GenerationStatusRow({
+    required this.model,
+    required this.status,
+    required this.scenarioCount,
+    required this.detail,
+  });
 }
 
 class _PdfFontBundle {
@@ -888,6 +1095,7 @@ class _ScorePoint {
 
 class _ScenarioLcaSummary {
   final String name;
+  final String? modelName;
   final bool success;
   final String? error;
   final List<String> warnings;
@@ -895,6 +1103,7 @@ class _ScenarioLcaSummary {
 
   const _ScenarioLcaSummary({
     required this.name,
+    required this.modelName,
     required this.success,
     required this.error,
     required this.warnings,
@@ -915,7 +1124,10 @@ class _ParsedLca {
 
   int get successCount => scenarios.where((s) => s.success).length;
 
-  factory _ParsedLca.fromRaw(Map<String, dynamic>? raw) {
+  factory _ParsedLca.fromRaw(
+    Map<String, dynamic>? raw, {
+    required Map<String, String> scenarioModelByName,
+  }) {
     if (raw == null || raw.isEmpty) {
       return const _ParsedLca(
         scenarios: [],
@@ -936,6 +1148,7 @@ class _ParsedLca {
         scenarios.add(
           _ScenarioLcaSummary(
             name: name,
+            modelName: scenarioModelByName[name],
             success: false,
             error: 'Invalid result payload format.',
             warnings: const [],
@@ -984,6 +1197,7 @@ class _ParsedLca {
       scenarios.add(
         _ScenarioLcaSummary(
           name: name,
+          modelName: scenarioModelByName[name],
           success: success,
           error: error,
           warnings: warnings,

@@ -1,11 +1,11 @@
 {
   "ReCiPe 2016 v1.03, midpoint (H), climate change, global warming potential (GWP1000)": {
-    "base_total": 134.11599035819904,
+    "base_total": 136.68835079973985,
     "extra_total": 0.0,
     "top3_flows": [
       [
         "Carbon dioxide, fossil [biosphere3]",
-        91.79284531786107
+        93.56906528188847
       ],
       [
         "Carbon dioxide, fossil [biosphere3]",
@@ -13,7 +13,7 @@
       ],
       [
         "Methane, fossil [biosphere3]",
-        5.081268295136397
+        5.735748283055727
       ]
     ],
     "process_contributions": [
@@ -38,12 +38,12 @@
         14.507853563552992
       ],
       [
-        "04059b1f2bf8389d32bdad7a77fb9bed [LCA_Loop_Database]",
-        3.6279582651745272
+        "18ddf52edf2d042d877c78f63ab428f5 [LCA_Loop_Database]",
+        5.144720883081645
       ],
       [
-        "18ddf52edf2d042d877c78f63ab428f5 [LCA_Loop_Database]",
-        2.5723604415408223
+        "04059b1f2bf8389d32bdad7a77fb9bed [LCA_Loop_Database]",
+        3.6279582651745272
       ],
       [
         "7953c5298a5912329644019d128eaf09 [LCA_Loop_Database]",
@@ -85,7 +85,7 @@
     "flow_contributions": [
       [
         "Carbon dioxide, fossil [biosphere3]",
-        91.79284531786107,
+        93.56906528188847,
         "base"
       ],
       [
@@ -95,7 +95,7 @@
       ],
       [
         "Methane, fossil [biosphere3]",
-        5.081268295136397,
+        5.735748283055727,
         "base"
       ],
       [
@@ -105,17 +105,22 @@
       ],
       [
         "Methane, tetrafluoro-, R-14 [biosphere3]",
-        1.4472855124514514,
+        1.4472863074529652,
         "base"
       ],
       [
         "Dinitrogen monoxide [biosphere3]",
-        1.0339723048756206,
+        1.134453301471782,
         "base"
       ],
       [
         "Ethane, hexafluoro-, HFC-116 [biosphere3]",
-        0.22314043504580244,
+        0.22314047576181437,
+        "base"
+      ],
+      [
+        "Dinitrogen monoxide [biosphere3]",
+        0.05223889641103947,
         "base"
       ],
       [
@@ -124,18 +129,13 @@
         "base"
       ],
       [
-        "Dinitrogen monoxide [biosphere3]",
-        0.02627013220091963,
+        "Carbon dioxide, non-fossil [biosphere3]",
+        0.030279045924544334,
         "base"
       ],
       [
         "Ethane, 1,2-dichloro-1,1,2,2-tetrafluoro-, CFC-114 [biosphere3]",
-        0.022378017131584604,
-        "base"
-      ],
-      [
-        "Carbon dioxide, non-fossil [biosphere3]",
-        0.015139522962272167,
+        0.022445063709616297,
         "base"
       ],
       [
@@ -155,7 +155,7 @@
       ],
       [
         "Methane, chlorodifluoro-, HCFC-22 [biosphere3]",
-        0.0010673097563224099,
+        0.0010673263991059587,
         "base"
       ],
       [
@@ -165,12 +165,12 @@
       ],
       [
         "Methane, trifluoro-, HFC-23 [biosphere3]",
-        0.0003893604203331069,
+        0.0003923262161031893,
         "base"
       ],
       [
         "Sulfur hexafluoride [biosphere3]",
-        8.036173079930577e-05,
+        8.038442546952113e-05,
         "base"
       ],
       [
@@ -180,37 +180,37 @@
       ],
       [
         "Ethane, pentafluoro-, HFC-125 [biosphere3]",
-        1.5079798187968285e-05,
+        1.5194714762037376e-05,
         "base"
       ],
       [
         "Nitrogen fluoride [biosphere3]",
-        4.324518178744265e-06,
+        4.340434537719422e-06,
         "base"
       ],
       [
         "Ethane, 1,1,1,2-tetrafluoro-, HFC-134a [biosphere3]",
-        4.077485553713456e-06,
+        4.1076194869094085e-06,
         "base"
       ],
       [
         "Methane, difluoro-, HFC-32 [biosphere3]",
-        5.008209214662877e-07,
+        5.046374595063172e-07,
         "base"
       ],
       [
         "Ethane, 1,1,1-trifluoro-, HFC-143a [biosphere3]",
-        1.5329811075062705e-07,
+        3.065962215012541e-07,
         "base"
       ],
       [
         "Ethane, 1,1,1-trichloro-, HCFC-140 [biosphere3]",
-        1.4008237395187959e-07,
+        1.4039760199129753e-07,
         "base"
       ],
       [
         "Methane, dichloro-, HCC-30 [biosphere3]",
-        2.608335420749004e-08,
+        2.608336396798214e-08,
         "base"
       ],
       [
@@ -230,7 +230,7 @@
       ],
       [
         "Ethane, 1,2-dichloro- [biosphere3]",
-        2.1724911001572898e-10,
+        2.1724929385312107e-10,
         "base"
       ],
       [
@@ -241,16 +241,16 @@
     ]
   },
   "ReCiPe 2016 v1.03, midpoint (H), photochemical oxidant formation: human health, photochemical oxidant formation potential: humans (HOFP)": {
-    "base_total": 0.24030992552473973,
+    "base_total": 0.2469732610029436,
     "extra_total": 0.0,
     "top3_flows": [
       [
         "Nitrogen oxides [biosphere3]",
-        0.22728171841299627
+        0.23286746758094523
       ],
       [
         "NMVOC, non-methane volatile organic compounds [biosphere3]",
-        0.0041220884717643
+        0.004488435601220999
       ],
       [
         "Ethane [biosphere3]",
@@ -279,6 +279,10 @@
         0.026464017495403943
       ],
       [
+        "18ddf52edf2d042d877c78f63ab428f5 [LCA_Loop_Database]",
+        0.013326670956407771
+      ],
+      [
         "04059b1f2bf8389d32bdad7a77fb9bed [LCA_Loop_Database]",
         0.010796732606820687
       ],
@@ -289,10 +293,6 @@
       [
         "e83986a58e8438d72f2640f16ebd525e [LCA_Loop_Database]",
         0.007929257935099514
-      ],
-      [
-        "18ddf52edf2d042d877c78f63ab428f5 [LCA_Loop_Database]",
-        0.006663335478203886
       ],
       [
         "3721c46da4093e09963ccaffc279119d [LCA_Loop_Database]",
@@ -326,12 +326,12 @@
     "flow_contributions": [
       [
         "Nitrogen oxides [biosphere3]",
-        0.22728171841299627,
+        0.23286746758094523,
         "base"
       ],
       [
         "NMVOC, non-methane volatile organic compounds [biosphere3]",
-        0.0041220884717643,
+        0.004488435601220999,
         "base"
       ],
       [
@@ -341,7 +341,7 @@
       ],
       [
         "Ethane [biosphere3]",
-        0.001304101546307038,
+        0.001857475647365618,
         "base"
       ],
       [
@@ -351,7 +351,7 @@
       ],
       [
         "VOC, volatile organic compounds [biosphere3]",
-        0.0011987549419727906,
+        0.0011989392701121026,
         "base"
       ],
       [
@@ -361,17 +361,17 @@
       ],
       [
         "Propane [biosphere3]",
-        0.0001934028599019257,
+        0.0002752957683595923,
         "base"
       ],
       [
         "Butane [biosphere3]",
-        0.00012313285382060712,
+        0.0001608548714366407,
         "base"
       ],
       [
         "Pentane [biosphere3]",
-        9.33046206934307e-05,
+        0.00011004171390382566,
         "base"
       ],
       [
@@ -380,53 +380,53 @@
         "base"
       ],
       [
-        "Formaldehyde [biosphere3]",
-        3.263266152010236e-05,
+        "Hexane [biosphere3]",
+        4.036509687760592e-05,
         "base"
       ],
       [
-        "Hexane [biosphere3]",
-        2.1259998696434576e-05,
+        "Formaldehyde [biosphere3]",
+        3.288335442369406e-05,
         "base"
       ],
       [
         "Benzene, ethyl- [biosphere3]",
-        1.7932419817849305e-05,
+        1.7997130138364664e-05,
         "base"
       ],
       [
         "Toluene [biosphere3]",
-        8.299102428418811e-06,
+        8.33854238876531e-06,
         "base"
       ],
       [
         "Benzene [biosphere3]",
-        5.970911166811371e-06,
+        6.30166920802973e-06,
         "base"
       ],
       [
         "Propene [biosphere3]",
-        5.873049785596357e-06,
-        "base"
-      ],
-      [
-        "Ethanol [biosphere3]",
-        2.585537980124272e-06,
+        5.887967067129046e-06,
         "base"
       ],
       [
         "Heptane [biosphere3]",
-        2.318667451744361e-06,
+        3.791098312047936e-06,
+        "base"
+      ],
+      [
+        "Ethanol [biosphere3]",
+        2.5990581342511946e-06,
         "base"
       ],
       [
         "Acetaldehyde [biosphere3]",
-        2.084341993116079e-06,
+        2.0960073892815626e-06,
         "base"
       ],
       [
         "Acetic acid [biosphere3]",
-        1.908448584575295e-06,
+        1.9212505583226956e-06,
         "base"
       ],
       [
@@ -436,7 +436,7 @@
       ],
       [
         "Methanol [biosphere3]",
-        9.205149659506432e-07,
+        9.256745367351286e-07,
         "base"
       ],
       [
@@ -446,67 +446,67 @@
       ],
       [
         "Acetone [biosphere3]",
-        2.1594943790053112e-07,
+        2.171941453174897e-07,
         "base"
       ],
       [
         "Butene [biosphere3]",
-        7.24623457237783e-09,
+        1.2861222364435321e-08,
         "base"
       ],
       [
         "2-Propanol [biosphere3]",
-        3.088238868510784e-09,
+        3.099163799127891e-09,
         "base"
       ],
       [
         "Cyclohexane [biosphere3]",
-        2.3585025159284116e-09,
+        2.358508415198254e-09,
         "base"
       ],
       [
         "Styrene [biosphere3]",
-        1.5069692451389788e-09,
+        1.5070084294715805e-09,
         "base"
       ],
       [
         "Acrolein [biosphere3]",
-        1.06979737341667e-09,
+        1.4105652881915565e-09,
         "base"
       ],
       [
         "Ethylene [biosphere3]",
-        3.197971344404138e-10,
+        6.395942688808276e-10,
         "base"
       ],
       [
         "Propionic acid [biosphere3]",
-        2.913775401993513e-10,
+        3.000387317674669e-10,
         "base"
       ],
       [
         "Butyl acetate [biosphere3]",
-        2.012621252822644e-10,
+        2.0171502642662984e-10,
         "base"
       ],
       [
         "Phenol [biosphere3]",
-        -1.0905766051699598e-10,
+        -1.0954513078514025e-10,
         "base"
       ],
       [
         "Butadiene [biosphere3]",
-        5.2571265463867125e-11,
+        5.25713986280925e-11,
         "base"
       ],
       [
         "Methane, dichloro-, HCC-30 [biosphere3]",
-        2.584623280560377e-11,
+        2.5846242477364124e-11,
         "base"
       ],
       [
         "Ethane, 1,1,1-trichloro-, HCFC-140 [biosphere3]",
-        -2.6347099349498597e-12,
+        -2.6406388353803627e-12,
         "base"
       ],
       [
@@ -521,38 +521,43 @@
       ],
       [
         "Nitrate [biosphere3]",
-        9.049437567217639e-15,
+        9.123353561987677e-15,
         "base"
       ],
       [
         "Cumene [biosphere3]",
-        2.6995037953414792e-15,
+        2.7501465746275702e-15,
         "base"
       ]
     ]
   },
   "ReCiPe 2016 v1.03, midpoint (H), ecotoxicity: freshwater, freshwater ecotoxicity potential (FETP)": {
-    "base_total": 0.009158583646295102,
+    "base_total": 0.011703751280593958,
     "extra_total": 0.0,
     "top3_flows": [
       [
         "PAH, polycyclic aromatic hydrocarbons [biosphere3]",
-        0.0028600121995206555
+        0.0028600790607465447
+      ],
+      [
+        "Copper ion [biosphere3]",
+        0.002042831362064179
       ],
       [
         "Zinc II [biosphere3]",
         0.001730345875785133
-      ],
-      [
-        "Copper ion [biosphere3]",
-        0.0010661595298870896
       ]
     ],
     "process_contributions": [],
     "flow_contributions": [
       [
         "PAH, polycyclic aromatic hydrocarbons [biosphere3]",
-        0.0028600121995206555,
+        0.0028600790607465447,
+        "base"
+      ],
+      [
+        "Copper ion [biosphere3]",
+        0.002042831362064179,
         "base"
       ],
       [
@@ -562,17 +567,17 @@
       ],
       [
         "Copper ion [biosphere3]",
-        0.0010661595298870896,
-        "base"
-      ],
-      [
-        "Copper ion [biosphere3]",
-        0.0007474942242939875,
+        0.0011199496864779945,
         "base"
       ],
       [
         "Nickel II [biosphere3]",
-        0.0005948083880282458,
+        0.0011104542158703503,
+        "base"
+      ],
+      [
+        "Chromium VI [biosphere3]",
+        0.0006773715874302372,
         "base"
       ],
       [
@@ -581,8 +586,8 @@
         "base"
       ],
       [
-        "Chromium VI [biosphere3]",
-        0.0003386857937151186,
+        "Arsenic ion [biosphere3]",
+        0.0005372312269461777,
         "base"
       ],
       [
@@ -591,28 +596,28 @@
         "base"
       ],
       [
-        "Arsenic ion [biosphere3]",
-        0.00027880894124945323,
-        "base"
-      ],
-      [
         "Phenol [biosphere3]",
-        0.00019482565019570262,
+        0.00019780987622602386,
         "base"
       ],
       [
         "Arsenic ion [biosphere3]",
-        0.00014155437144115212,
+        0.0001975254564850454,
         "base"
       ],
       [
         "PAH, polycyclic aromatic hydrocarbons [biosphere3]",
-        5.556463711915887e-05,
+        5.558067355434309e-05,
         "base"
       ],
       [
         "Barium II [biosphere3]",
         4.438139728108581e-05,
+        "base"
+      ],
+      [
+        "Phenol [biosphere3]",
+        3.597324713056693e-05,
         "base"
       ],
       [
@@ -623,11 +628,6 @@
       [
         "Nickel II [biosphere3]",
         2.3515201291957055e-05,
-        "base"
-      ],
-      [
-        "Phenol [biosphere3]",
-        2.2639786859070198e-05,
         "base"
       ],
       [
@@ -647,32 +647,32 @@
       ],
       [
         "Benz(a)anthracene [biosphere3]",
-        9.404981806813062e-06,
+        1.0906292700333298e-05,
         "base"
       ],
       [
         "Anthracene [biosphere3]",
-        6.6387154806883675e-06,
+        1.0586170781989174e-05,
         "base"
       ],
       [
         "Formaldehyde [biosphere3]",
-        6.135721986414454e-06,
+        6.182858256910139e-06,
         "base"
       ],
       [
         "Xylene [biosphere3]",
-        5.905040458576427e-06,
+        6.0001537683024295e-06,
         "base"
       ],
       [
         "Chromium VI [biosphere3]",
-        4.972482358135606e-06,
+        5.067755720601559e-06,
         "base"
       ],
       [
         "Fluoranthene [biosphere3]",
-        4.330959651307293e-06,
+        4.823769648450811e-06,
         "base"
       ],
       [
@@ -686,13 +686,28 @@
         "base"
       ],
       [
+        "Benzene [biosphere3]",
+        2.8384840319791495e-06,
+        "base"
+      ],
+      [
+        "Toluene [biosphere3]",
+        2.74692059345405e-06,
+        "base"
+      ],
+      [
         "Zinc II [biosphere3]",
         2.5935233088603124e-06,
         "base"
       ],
       [
         "Acetic acid [biosphere3]",
-        2.1777388756503367e-06,
+        2.192347262871297e-06,
+        "base"
+      ],
+      [
+        "Anthracene [biosphere3]",
+        2.040427552166442e-06,
         "base"
       ],
       [
@@ -712,27 +727,22 @@
       ],
       [
         "Benzo(a)pyrene [biosphere3]",
-        1.7840024942828704e-06,
-        "base"
-      ],
-      [
-        "Benzene [biosphere3]",
-        1.6568547740622108e-06,
-        "base"
-      ],
-      [
-        "Toluene [biosphere3]",
-        1.59621617429373e-06,
+        1.7840547237405041e-06,
         "base"
       ],
       [
         "Arsenic ion [biosphere3]",
-        1.4233057569867924e-06,
+        1.5635893049648077e-06,
         "base"
       ],
       [
-        "Anthracene [biosphere3]",
-        1.2209616596899411e-06,
+        "Xylene [biosphere3]",
+        1.3759202940599735e-06,
+        "base"
+      ],
+      [
+        "Toluene [biosphere3]",
+        1.1965780132028314e-06,
         "base"
       ],
       [
@@ -741,18 +751,13 @@
         "base"
       ],
       [
+        "Benzene [biosphere3]",
+        1.0425074390520055e-06,
+        "base"
+      ],
+      [
         "Dioxins, measured as 2,3,7,8-tetrachlorodibenzo-p-dioxin [biosphere3]",
-        9.843099478493763e-07,
-        "base"
-      ],
-      [
-        "Toluene [biosphere3]",
-        9.578970729604565e-07,
-        "base"
-      ],
-      [
-        "Xylene [biosphere3]",
-        9.173804457640599e-07,
+        9.843134266238229e-07,
         "base"
       ],
       [
@@ -766,13 +771,18 @@
         "base"
       ],
       [
-        "Benzene [biosphere3]",
-        7.974082843981338e-07,
+        "Benzene, ethyl- [biosphere3]",
+        6.430468713050085e-07,
         "base"
       ],
       [
         "Chromium VI [biosphere3]",
-        5.206504759943103e-07,
+        5.206505090185577e-07,
+        "base"
+      ],
+      [
+        "Acenaphthene [biosphere3]",
+        4.830397443325584e-07,
         "base"
       ],
       [
@@ -782,32 +792,22 @@
       ],
       [
         "Benzene, ethyl- [biosphere3]",
-        4.258985934073589e-07,
-        "base"
-      ],
-      [
-        "Acenaphthene [biosphere3]",
-        3.9902132637631427e-07,
-        "base"
-      ],
-      [
-        "Benzene, ethyl- [biosphere3]",
-        3.41113327853762e-07,
+        3.861551767319754e-07,
         "base"
       ],
       [
         "Methanol [biosphere3]",
-        2.164223793749448e-07,
+        2.5847297835180197e-07,
         "base"
       ],
       [
         "Acetic acid [biosphere3]",
-        2.094804134227385e-07,
+        2.0950680614931217e-07,
         "base"
       ],
       [
         "Silver I [biosphere3]",
-        7.683726733419534e-08,
+        1.5360385995198935e-07,
         "base"
       ],
       [
@@ -821,6 +821,11 @@
         "base"
       ],
       [
+        "Acenaphthene [biosphere3]",
+        4.387698643868246e-08,
+        "base"
+      ],
+      [
         "Chromium VI [biosphere3]",
         4.335936472841014e-08,
         "base"
@@ -831,53 +836,48 @@
         "base"
       ],
       [
-        "Acenaphthene [biosphere3]",
-        2.643770105623458e-08,
-        "base"
-      ],
-      [
         "Nickel II [biosphere3]",
         2.1830249461451957e-08,
         "base"
       ],
       [
         "Acetic acid [biosphere3]",
-        9.235715082625956e-09,
+        9.235721239400061e-09,
         "base"
       ],
       [
         "PAH, polycyclic aromatic hydrocarbons [biosphere3]",
-        6.581647687790848e-09,
+        6.603655211198656e-09,
         "base"
       ],
       [
         "Benzene, chloro- [biosphere3]",
-        5.8968435228813985e-09,
+        6.238463751916741e-09,
         "base"
       ],
       [
         "Benzene [biosphere3]",
-        5.806423255879928e-09,
+        6.1280695053291865e-09,
         "base"
       ],
       [
         "Pentane [biosphere3]",
-        4.047490097666752e-09,
-        "base"
-      ],
-      [
-        "Xylene [biosphere3]",
-        3.704038423321864e-09,
-        "base"
-      ],
-      [
-        "Acetaldehyde [biosphere3]",
-        3.603083646391614e-09,
+        4.7735336583107825e-09,
         "base"
       ],
       [
         "Phenanthrene [biosphere3]",
-        3.4699622538936216e-09,
+        4.575266681433599e-09,
+        "base"
+      ],
+      [
+        "Xylene [biosphere3]",
+        3.717805992233908e-09,
+        "base"
+      ],
+      [
+        "Acetaldehyde [biosphere3]",
+        3.623248954335967e-09,
         "base"
       ],
       [
@@ -891,23 +891,23 @@
         "base"
       ],
       [
+        "Fluoranthene [biosphere3]",
+        3.186818601031761e-09,
+        "base"
+      ],
+      [
         "Methanol [biosphere3]",
-        2.579787165721548e-09,
+        2.5942471093213793e-09,
         "base"
       ],
       [
         "Ethanol [biosphere3]",
-        2.459414176215771e-09,
-        "base"
-      ],
-      [
-        "Fluoranthene [biosphere3]",
-        2.3442194214360342e-09,
+        2.4722748106291853e-09,
         "base"
       ],
       [
         "Benzene, ethyl- [biosphere3]",
-        2.265712923093535e-09,
+        2.2738888977215235e-09,
         "base"
       ],
       [
@@ -931,28 +931,28 @@
         "base"
       ],
       [
+        "Naphthalene [biosphere3]",
+        9.009753168190831e-10,
+        "base"
+      ],
+      [
         "Chromium VI [biosphere3]",
         8.409338832920943e-10,
         "base"
       ],
       [
         "Toluene [biosphere3]",
-        7.521061575754547e-10,
-        "base"
-      ],
-      [
-        "Naphthalene [biosphere3]",
-        5.170800212131871e-10,
+        7.556804039818561e-10,
         "base"
       ],
       [
         "Acrolein [biosphere3]",
-        4.584845886071443e-10,
+        6.045279806535243e-10,
         "base"
       ],
       [
         "Acetone [biosphere3]",
-        4.2793650079371303e-10,
+        4.3040307695942914e-10,
         "base"
       ],
       [
@@ -962,7 +962,7 @@
       ],
       [
         "Dioxins, measured as 2,3,7,8-tetrachlorodibenzo-p-dioxin [biosphere3]",
-        3.739291380135622e-10,
+        3.7393931711640736e-10,
         "base"
       ],
       [
@@ -977,17 +977,22 @@
       ],
       [
         "Acrylonitrile [biosphere3]",
-        2.478347511220165e-10,
+        2.478353803698129e-10,
         "base"
       ],
       [
-        "Tin ion [biosphere3]",
-        1.912495549141844e-10,
+        "Anthracene [biosphere3]",
+        2.0091950101838102e-10,
         "base"
       ],
       [
         "Propionic acid [biosphere3]",
-        1.8868396976815742e-10,
+        1.9429259700441063e-10,
+        "base"
+      ],
+      [
+        "Tin ion [biosphere3]",
+        1.9133270525062366e-10,
         "base"
       ],
       [
@@ -1001,68 +1006,63 @@
         "base"
       ],
       [
-        "Anthracene [biosphere3]",
-        1.5238085308407682e-10,
-        "base"
-      ],
-      [
         "Polychlorinated biphenyls [biosphere3]",
-        1.0804203772992513e-10,
+        1.38310047772725e-10,
         "base"
       ],
       [
         "Fluorene [biosphere3]",
-        9.432263430291659e-11,
-        "base"
-      ],
-      [
-        "Phenol [biosphere3]",
-        5.223922191615221e-11,
+        1.2436769900574935e-10,
         "base"
       ],
       [
         "Arsenic ion [biosphere3]",
-        3.6561518240024735e-11,
+        5.2972457462163724e-11,
+        "base"
+      ],
+      [
+        "Phenol [biosphere3]",
+        5.247272286779922e-11,
         "base"
       ],
       [
         "Tin ion [biosphere3]",
-        2.6925808770631978e-11,
+        2.6929197364339827e-11,
+        "base"
+      ],
+      [
+        "Hexane [biosphere3]",
+        1.678631270151474e-11,
         "base"
       ],
       [
         "Diethylamine [biosphere3]",
-        -1.1707269460602266e-11,
+        -1.1707268017330475e-11,
         "base"
       ],
       [
         "Hexane [biosphere3]",
-        8.841227044103484e-12,
-        "base"
-      ],
-      [
-        "Hexane [biosphere3]",
-        4.853758133539224e-12,
-        "base"
-      ],
-      [
-        "Chromium VI [biosphere3]",
-        3.82808705126476e-12,
-        "base"
-      ],
-      [
-        "Hexane [biosphere3]",
-        3.4281030022217332e-12,
+        4.85376892064464e-12,
         "base"
       ],
       [
         "Dibenz(a,h)anthracene [biosphere3]",
-        3.3107388178500186e-12,
+        4.365325254777148e-12,
+        "base"
+      ],
+      [
+        "Chromium VI [biosphere3]",
+        3.8999035569998075e-12,
+        "base"
+      ],
+      [
+        "Hexane [biosphere3]",
+        3.428111041183524e-12,
         "base"
       ],
       [
         "2-Propanol [biosphere3]",
-        2.9085251211855014e-12,
+        2.9188142978003876e-12,
         "base"
       ],
       [
@@ -1071,8 +1071,13 @@
         "base"
       ],
       [
+        "Methyl acrylate [biosphere3]",
+        1.873849356931467e-12,
+        "base"
+      ],
+      [
         "Ethane, 1,1,2-trichloro- [biosphere3]",
-        1.1177549738648067e-12,
+        1.1214883727413138e-12,
         "base"
       ],
       [
@@ -1082,22 +1087,17 @@
       ],
       [
         "Methyl acrylate [biosphere3]",
-        9.369246784657336e-13,
-        "base"
-      ],
-      [
-        "Methyl acrylate [biosphere3]",
-        7.027570218900793e-13,
+        7.027695465289896e-13,
         "base"
       ],
       [
         "Styrene [biosphere3]",
-        4.46262715687565e-13,
+        4.462743194457277e-13,
         "base"
       ],
       [
         "Butyl acetate [biosphere3]",
-        3.6496101191163535e-13,
+        3.6578228546080283e-13,
         "base"
       ],
       [
@@ -1107,22 +1107,22 @@
       ],
       [
         "Dimethylamine [biosphere3]",
-        2.5533429688355765e-13,
+        2.562740530693807e-13,
         "base"
       ],
       [
         "Ethane, 1,2-dichloro- [biosphere3]",
-        2.090839568556325e-13,
+        2.090841048610824e-13,
         "base"
       ],
       [
         "Heptane [biosphere3]",
-        1.1921967291252502e-13,
+        1.94928125808449e-13,
         "base"
       ],
       [
         "Methane, dichloro-, HCC-30 [biosphere3]",
-        9.224022533376023e-14,
+        9.224025985040957e-14,
         "base"
       ],
       [
@@ -1132,17 +1132,17 @@
       ],
       [
         "Ethane, 1,1,1-trichloro-, HCFC-140 [biosphere3]",
-        5.973460816704502e-14,
+        5.986902924292116e-14,
         "base"
       ],
       [
         "Formaldehyde [biosphere3]",
-        4.979094207783566e-14,
+        4.9974197294052834e-14,
         "base"
       ],
       [
         "Ethane, 1,2-dichloro- [biosphere3]",
-        3.410811027246945e-14,
+        3.410813913494001e-14,
         "base"
       ],
       [
@@ -1152,7 +1152,7 @@
       ],
       [
         "Cyclohexane [biosphere3]",
-        4.901985621341405e-15,
+        4.90199788256892e-15,
         "base"
       ],
       [
@@ -1192,7 +1192,7 @@
       ],
       [
         "Ethane, hexachloro- [biosphere3]",
-        6.380215390269975e-17,
+        1.276043078053995e-16,
         "base"
       ],
       [
@@ -1207,7 +1207,7 @@
       ],
       [
         "Methane, monochloro-, R-40 [biosphere3]",
-        2.1908892500763568e-17,
+        2.3744007443798204e-17,
         "base"
       ],
       [
@@ -1227,7 +1227,7 @@
       ],
       [
         "Cumene [biosphere3]",
-        6.772031072796297e-19,
+        6.899074596695025e-19,
         "base"
       ],
       [
@@ -1242,7 +1242,7 @@
       ],
       [
         "Ethylene diamine [biosphere3]",
-        1.1973528770040043e-25,
+        2.3947057540080086e-25,
         "base"
       ],
       [
@@ -1263,16 +1263,16 @@
     ]
   },
   "ReCiPe 2016 v1.03, midpoint (H), eutrophication: freshwater, freshwater eutrophication potential (FEP)": {
-    "base_total": 0.0011459667685658668,
+    "base_total": 0.0011490607256941707,
     "extra_total": 0.0,
     "top3_flows": [
       [
         "Phosphate [biosphere3]",
-        0.0008647449807095199
+        0.0008678389187398805
       ],
       [
         "Phosphate [biosphere3]",
-        0.00028085950925558985
+        0.0002808595282305903
       ],
       [
         "Phosphate [biosphere3]",
@@ -1298,7 +1298,7 @@
       ],
       [
         "18ddf52edf2d042d877c78f63ab428f5 [LCA_Loop_Database]",
-        3.0939571283039627e-06
+        6.187914256607925e-06
       ],
       [
         "04059b1f2bf8389d32bdad7a77fb9bed [LCA_Loop_Database]",
@@ -1348,12 +1348,12 @@
     "flow_contributions": [
       [
         "Phosphate [biosphere3]",
-        0.0008647449807095199,
+        0.0008678389187398805,
         "base"
       ],
       [
         "Phosphate [biosphere3]",
-        0.00028085950925558985,
+        0.0002808595282305903,
         "base"
       ],
       [
@@ -1369,16 +1369,16 @@
     ]
   },
   "ReCiPe 2016 v1.03, midpoint (H), photochemical oxidant formation: terrestrial ecosystems, photochemical oxidant formation potential: ecosystems (EOFP)": {
-    "base_total": 0.24829164380316,
+    "base_total": 0.25561520451467384,
     "extra_total": 0.0,
     "top3_flows": [
       [
         "Nitrogen oxides [biosphere3]",
-        0.22728171841299627
+        0.23286746758094523
       ],
       [
         "NMVOC, non-methane volatile organic compounds [biosphere3]",
-        0.006641142537842483
+        0.0072313684686338316
       ],
       [
         "Ethane [biosphere3]",
@@ -1407,6 +1407,10 @@
         0.027246682880590376
       ],
       [
+        "18ddf52edf2d042d877c78f63ab428f5 [LCA_Loop_Database]",
+        0.01464712142302764
+      ],
+      [
         "04059b1f2bf8389d32bdad7a77fb9bed [LCA_Loop_Database]",
         0.011119188604141898
       ],
@@ -1417,10 +1421,6 @@
       [
         "e83986a58e8438d72f2640f16ebd525e [LCA_Loop_Database]",
         0.008002220471131069
-      ],
-      [
-        "18ddf52edf2d042d877c78f63ab428f5 [LCA_Loop_Database]",
-        0.00732356071151382
       ],
       [
         "3721c46da4093e09963ccaffc279119d [LCA_Loop_Database]",
@@ -1454,12 +1454,12 @@
     "flow_contributions": [
       [
         "Nitrogen oxides [biosphere3]",
-        0.22728171841299627,
+        0.23286746758094523,
         "base"
       ],
       [
         "NMVOC, non-methane volatile organic compounds [biosphere3]",
-        0.006641142537842483,
+        0.0072313684686338316,
         "base"
       ],
       [
@@ -1469,7 +1469,7 @@
       ],
       [
         "Ethane [biosphere3]",
-        0.0021045500816265304,
+        0.002997581389541756,
         "base"
       ],
       [
@@ -1479,7 +1479,7 @@
       ],
       [
         "VOC, volatile organic compounds [biosphere3]",
-        0.001931327406511718,
+        0.001931624379625054,
         "base"
       ],
       [
@@ -1489,17 +1489,17 @@
       ],
       [
         "Propane [biosphere3]",
-        0.0003114242901570378,
+        0.00044329121755540653,
         "base"
       ],
       [
         "Butane [biosphere3]",
-        0.00019899148697794544,
+        0.00025995296187528535,
         "base"
       ],
       [
         "Pentane [biosphere3]",
-        0.00015057435339491576,
+        0.0001775845589896221,
         "base"
       ],
       [
@@ -1508,53 +1508,53 @@
         "base"
       ],
       [
-        "Formaldehyde [biosphere3]",
-        5.256398771800919e-05,
+        "Hexane [biosphere3]",
+        6.514091496110198e-05,
         "base"
       ],
       [
-        "Hexane [biosphere3]",
-        3.430923927562546e-05,
+        "Formaldehyde [biosphere3]",
+        5.29677984429563e-05,
         "base"
       ],
       [
         "Benzene, ethyl- [biosphere3]",
-        2.888515527545786e-05,
+        2.8989389264790987e-05,
         "base"
       ],
       [
         "Toluene [biosphere3]",
-        1.3330433275647715e-05,
+        1.3393783711954278e-05,
         "base"
       ],
       [
         "Benzene [biosphere3]",
-        9.622542789489401e-06,
+        1.0155582607981797e-05,
         "base"
       ],
       [
         "Propene [biosphere3]",
-        9.474448239028086e-06,
-        "base"
-      ],
-      [
-        "Ethanol [biosphere3]",
-        4.183106162965286e-06,
+        9.498512910179877e-06,
         "base"
       ],
       [
         "Heptane [biosphere3]",
-        3.7427309260440465e-06,
+        6.119489401337219e-06,
+        "base"
+      ],
+      [
+        "Ethanol [biosphere3]",
+        4.204980233463315e-06,
         "base"
       ],
       [
         "Acetaldehyde [biosphere3]",
-        3.3621797979410117e-06,
+        3.3809968440169926e-06,
         "base"
       ],
       [
         "Acetic acid [biosphere3]",
-        3.0792759370754763e-06,
+        3.099931882447049e-06,
         "base"
       ],
       [
@@ -1564,7 +1564,7 @@
       ],
       [
         "Methanol [biosphere3]",
-        1.4853320045063455e-06,
+        1.493657426578976e-06,
         "base"
       ],
       [
@@ -1574,67 +1574,67 @@
       ],
       [
         "Acetone [biosphere3]",
-        3.4769840689489186e-07,
+        3.497025000295362e-07,
         "base"
       ],
       [
         "Butene [biosphere3]",
-        1.1695676853662463e-08,
+        2.0758464167158765e-08,
         "base"
       ],
       [
         "2-Propanol [biosphere3]",
-        4.965774597145978e-09,
+        4.983341484049442e-09,
         "base"
       ],
       [
         "Cyclohexane [biosphere3]",
-        3.792102084433917e-09,
+        3.792111569534448e-09,
         "base"
       ],
       [
         "Styrene [biosphere3]",
-        2.4311327048650926e-09,
+        2.4311959193685163e-09,
         "base"
       ],
       [
         "Acrolein [biosphere3]",
-        1.7247753571411618e-09,
+        2.2741766891251627e-09,
         "base"
       ],
       [
         "Ethylene [biosphere3]",
-        5.153755472386834e-10,
+        1.0307510944773668e-09,
         "base"
       ],
       [
         "Propionic acid [biosphere3]",
-        4.701633345042611e-10,
+        4.841389302404986e-10,
         "base"
       ],
       [
         "Butyl acetate [biosphere3]",
-        3.2440978836589805e-10,
+        3.251398092984914e-10,
         "base"
       ],
       [
         "Phenol [biosphere3]",
-        -1.7593832525393824e-10,
+        -1.7672474137713232e-10,
         "base"
       ],
       [
         "Butadiene [biosphere3]",
-        8.463485461675202e-11,
+        8.463506899878669e-11,
         "base"
       ],
       [
         "Methane, dichloro-, HCC-30 [biosphere3]",
-        4.14962453300978e-11,
+        4.149626085815341e-11,
         "base"
       ],
       [
         "Ethane, 1,1,1-trichloro-, HCFC-140 [biosphere3]",
-        -4.246020143101014e-12,
+        -4.255574982637775e-12,
         "base"
       ],
       [
@@ -1649,31 +1649,31 @@
       ],
       [
         "Nitrate [biosphere3]",
-        9.049437567217639e-15,
+        9.123353561987677e-15,
         "base"
       ],
       [
         "Cumene [biosphere3]",
-        4.3517862907660056e-15,
+        4.433425943580651e-15,
         "base"
       ]
     ]
   },
   "ReCiPe 2016 v1.03, midpoint (H), acidification: terrestrial, terrestrial acidification potential (TAP)": {
-    "base_total": 0.3328881795280289,
+    "base_total": 0.34791492678406943,
     "extra_total": 0.0,
     "top3_flows": [
       [
         "Sulfur dioxide [biosphere3]",
-        0.2434323688285076
+        0.25311485279962653
       ],
       [
         "Nitrogen oxides [biosphere3]",
-        0.08182141862867866
+        0.08383228832914028
       ],
       [
         "Ammonia [biosphere3]",
-        0.005677007213860875
+        0.009010400653503503
       ]
     ],
     "process_contributions": [
@@ -1699,7 +1699,7 @@
       ],
       [
         "18ddf52edf2d042d877c78f63ab428f5 [LCA_Loop_Database]",
-        0.015026747256040522
+        0.030053494512081044
       ],
       [
         "04059b1f2bf8389d32bdad7a77fb9bed [LCA_Loop_Database]",
@@ -1745,17 +1745,17 @@
     "flow_contributions": [
       [
         "Sulfur dioxide [biosphere3]",
-        0.2434323688285076,
+        0.25311485279962653,
         "base"
       ],
       [
         "Nitrogen oxides [biosphere3]",
-        0.08182141862867866,
+        0.08383228832914028,
         "base"
       ],
       [
         "Ammonia [biosphere3]",
-        0.005677007213860875,
+        0.009010400653503503,
         "base"
       ],
       [
@@ -1780,12 +1780,12 @@
       ],
       [
         "Sulfur trioxide [biosphere3]",
-        1.5800649677544244e-11,
+        1.5836205957686646e-11,
         "base"
       ],
       [
         "Nitrate [biosphere3]",
-        3.3018218150658957e-15,
+        3.3287911645090177e-15,
         "base"
       ]
     ]

@@ -3116,6 +3116,9 @@ class ResultsPage extends StatefulWidget {
   final Map<String, List<Map<String, dynamic>>>? rawDeltasByScenario;
   final String? productSystemName;
   final String? impactMethodName;
+  final Map<String, String>? scenarioModelByName;
+  final String? generationRouteLabel;
+  final Map<String, Map<String, dynamic>>? generationByModel;
 
   const ResultsPage({
     required this.results,
@@ -3125,6 +3128,9 @@ class ResultsPage extends StatefulWidget {
     this.rawDeltasByScenario,
     this.productSystemName,
     this.impactMethodName,
+    this.scenarioModelByName,
+    this.generationRouteLabel,
+    this.generationByModel,
     Key? key,
   }) : super(key: key);
 
@@ -3387,6 +3393,12 @@ class _ResultsPageState extends State<ResultsPage> {
         lcaResults: widget.results,
         productSystemName: widget.productSystemName,
         impactMethodName: widget.impactMethodName,
+        scenarioModelByName:
+            widget.scenarioModelByName ?? const <String, String>{},
+        generationRouteLabel: widget.generationRouteLabel,
+        generationByModel:
+            widget.generationByModel ??
+                const <String, Map<String, dynamic>>{},
       );
 
       await downloadPdf(

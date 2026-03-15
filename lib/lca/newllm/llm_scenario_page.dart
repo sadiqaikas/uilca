@@ -48,6 +48,7 @@ enum _PostRunAction {
 }
 
 class _LLMScenarioPageState extends State<LLMScenarioPage> {
+  static const String _gpt5ModelName = 'gpt-5';
   static const String _defaultOpenAiKey = String.fromEnvironment(
     'OPENAI_API_KEY',
     defaultValue: '',
@@ -56,6 +57,21 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     'OPENAI_API_BASE',
     defaultValue: 'https://api.openai.com/v1',
   );
+  static const String _defaultTogetherApiKey = String.fromEnvironment(
+    'TOGETHER_API_KEY',
+    defaultValue: '',
+  );
+  static const String _defaultTogetherApiBase = String.fromEnvironment(
+    'TOGETHER_API_BASE',
+    defaultValue: 'https://api.together.xyz/v1',
+  );
+  static const List<String> _openWeightModels = [
+    'Qwen/Qwen3.5-397B-A17B',
+    'zai-org/GLM-5',
+    'moonshotai/Kimi-K2.5',
+    'MiniMaxAI/MiniMax-M2.5',
+    'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8',
+  ];
   static const String _brightwayBackendBaseUrl = String.fromEnvironment(
     'BRIGHTWAY_BACKEND_BASE_URL',
     defaultValue: 'http://localhost:8000',
@@ -74,10 +90,14 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
 
   bool _isLoading = false;
   String? _openAiApiKey;
+  String? _togetherApiKey;
   Map<String, dynamic>? _mergedScenarios; // scenarioName -> { model, meta? }
   Map<String, List<Map<String, dynamic>>>? _rawDeltasByScenario;
+  Map<String, String> _scenarioModelByName = const {};
+  Map<String, Map<String, dynamic>> _generationByModel = const {};
   List<String> _functionsUsed = const [];
   LlmScenarioAbstention? _abstention;
+  bool _isOpenWeightMegaRun = false;
   int _generationRunSeq = 0;
 
   void _debugLog(String message) {
@@ -144,27 +164,35 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
   @override
   void initState() {
     super.initState();
-    _primeApiKey();
+    _primeApiKeys();
     final selected = widget.openLcaProductSystem;
     if (selected != null) {
       _selectedOpenLcaProductSystem = Map<String, dynamic>.from(selected);
     }
   }
 
-  Future<void> _primeApiKey() async {
-    final fromDefine = _defaultOpenAiKey.trim();
-    if (fromDefine.isNotEmpty) {
-      await saveStoredOpenAiApiKey(fromDefine);
-      if (!mounted) return;
-      setState(() => _openAiApiKey = fromDefine);
-      return;
+  Future<void> _primeApiKeys() async {
+    final openAiFromDefine = _defaultOpenAiKey.trim();
+    if (openAiFromDefine.isNotEmpty) {
+      await saveStoredOpenAiApiKey(openAiFromDefine);
+    }
+    final togetherFromDefine = _defaultTogetherApiKey.trim();
+    if (togetherFromDefine.isNotEmpty) {
+      await saveStoredTogetherApiKey(togetherFromDefine);
     }
 
-    final fromStorage = (await loadStoredOpenAiApiKey())?.trim();
+    final openAi =
+        openAiFromDefine.isNotEmpty ? openAiFromDefine : (await loadStoredOpenAiApiKey())?.trim();
+    final together = togetherFromDefine.isNotEmpty
+        ? togetherFromDefine
+        : (await loadStoredTogetherApiKey())?.trim();
+
     if (!mounted) return;
-    if (fromStorage != null && fromStorage.isNotEmpty) {
-      setState(() => _openAiApiKey = fromStorage);
-    }
+    setState(() {
+      _openAiApiKey = (openAi != null && openAi.isNotEmpty) ? openAi : null;
+      _togetherApiKey =
+          (together != null && together.isNotEmpty) ? together : null;
+    });
   }
 
   String _maskApiKey(String? key) {
@@ -174,58 +202,109 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     return '${value.substring(0, 6)}...${value.substring(value.length - 4)}';
   }
 
-  String? _validateApiKey(String key) {
+  String? _validateOpenAiApiKey(String key) {
     final trimmed = key.trim();
-    if (trimmed.isEmpty) return 'Enter an OpenAI API key.';
+    if (trimmed.isEmpty) return null;
     if (!trimmed.startsWith('sk-')) {
       return 'OpenAI API keys usually start with "sk-".';
     }
     return null;
   }
 
-  Future<String?> _showApiKeyDialog({String initialValue = ''}) async {
-    final keyController = TextEditingController(text: initialValue);
-    bool obscureText = true;
-    String? validationMessage;
+  Future<void> _saveKeysFromDialogResult(_ApiKeyDialogResult result) async {
+    final openAi = result.openAiKey.trim();
+    if (openAi.isEmpty) {
+      await clearStoredOpenAiApiKey();
+    } else {
+      await saveStoredOpenAiApiKey(openAi);
+    }
 
-    final selected = await showDialog<String>(
+    final together = result.togetherApiKey.trim();
+    if (together.isEmpty) {
+      await clearStoredTogetherApiKey();
+    } else {
+      await saveStoredTogetherApiKey(together);
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _openAiApiKey = openAi.isEmpty ? null : openAi;
+      _togetherApiKey = together.isEmpty ? null : together;
+    });
+  }
+
+  Future<_ApiKeyDialogResult?> _showApiKeyDialog({
+    String initialOpenAi = '',
+    String initialTogether = '',
+  }) async {
+    final openAiController = TextEditingController(text: initialOpenAi);
+    final togetherController = TextEditingController(text: initialTogether);
+    bool obscureOpenAi = true;
+    bool obscureTogether = true;
+    String? openAiError;
+
+    final selected = await showDialog<_ApiKeyDialogResult>(
       context: context,
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text('OpenAI API key'),
+              title: const Text('LLM API keys'),
               content: SizedBox(
-                width: 560,
+                width: 620,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Stored locally on this device/browser only. It is never sent to your OpenLCA backend.',
+                      'Stored locally on this device/browser only. Keys are sent only to the selected LLM API endpoint.',
                     ),
                     const SizedBox(height: 12),
                     TextField(
-                      controller: keyController,
-                      obscureText: obscureText,
+                      controller: openAiController,
+                      obscureText: obscureOpenAi,
                       enableSuggestions: false,
                       autocorrect: false,
                       decoration: InputDecoration(
-                        labelText: 'API key',
+                        labelText: 'OpenAI API key (for GPT-5)',
                         border: const OutlineInputBorder(),
-                        errorText: validationMessage,
+                        errorText: openAiError,
                       ),
                     ),
                     const SizedBox(height: 8),
                     Row(
                       children: [
                         Checkbox(
-                          value: !obscureText,
+                          value: !obscureOpenAi,
                           onChanged: (value) {
-                            setDialogState(() => obscureText = value != true);
+                            setDialogState(() => obscureOpenAi = value != true);
                           },
                         ),
-                        const Text('Show key'),
+                        const Text('Show OpenAI key'),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: togetherController,
+                      obscureText: obscureTogether,
+                      enableSuggestions: false,
+                      autocorrect: false,
+                      decoration: const InputDecoration(
+                        labelText: 'Together AI API key (for open-weight models)',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Checkbox(
+                          value: !obscureTogether,
+                          onChanged: (value) {
+                            setDialogState(
+                                () => obscureTogether = value != true);
+                          },
+                        ),
+                        const Text('Show Together key'),
                       ],
                     ),
                   ],
@@ -237,18 +316,29 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
                   child: const Text('Cancel'),
                 ),
                 OutlinedButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(''),
-                  child: const Text('Clear stored key'),
+                  onPressed: () => Navigator.of(dialogContext).pop(
+                    const _ApiKeyDialogResult(
+                      openAiKey: '',
+                      togetherApiKey: '',
+                    ),
+                  ),
+                  child: const Text('Clear stored keys'),
                 ),
                 ElevatedButton(
                   onPressed: () {
-                    final trimmed = keyController.text.trim();
-                    final error = _validateApiKey(trimmed);
-                    if (error != null) {
-                      setDialogState(() => validationMessage = error);
+                    final openAi = openAiController.text.trim();
+                    final together = togetherController.text.trim();
+                    final validation = _validateOpenAiApiKey(openAi);
+                    if (validation != null) {
+                      setDialogState(() => openAiError = validation);
                       return;
                     }
-                    Navigator.of(dialogContext).pop(trimmed);
+                    Navigator.of(dialogContext).pop(
+                      _ApiKeyDialogResult(
+                        openAiKey: openAi,
+                        togetherApiKey: together,
+                      ),
+                    );
                   },
                   child: const Text('Save'),
                 ),
@@ -259,7 +349,8 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       },
     );
 
-    keyController.dispose();
+    openAiController.dispose();
+    togetherController.dispose();
     return selected;
   }
 
@@ -276,42 +367,52 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     }
 
     if (!mounted) return null;
-    final entered = await _showApiKeyDialog();
+    final entered = await _showApiKeyDialog(
+      initialOpenAi: _openAiApiKey ?? '',
+      initialTogether: _togetherApiKey ?? '',
+    );
     if (entered == null) return null;
-    if (entered.isEmpty) {
-      await clearStoredOpenAiApiKey();
-      if (mounted) setState(() => _openAiApiKey = null);
-      return null;
+    await _saveKeysFromDialogResult(entered);
+    final normalized = entered.openAiKey.trim();
+    return normalized.isEmpty ? null : normalized;
+  }
+
+  Future<String?> _ensureTogetherApiKey() async {
+    final inMemory = _togetherApiKey?.trim();
+    if (inMemory != null && inMemory.isNotEmpty) {
+      return inMemory;
     }
 
-    final normalized = entered.trim();
-    await saveStoredOpenAiApiKey(normalized);
-    if (mounted) setState(() => _openAiApiKey = normalized);
-    return normalized;
+    final fromStorage = (await loadStoredTogetherApiKey())?.trim();
+    if (fromStorage != null && fromStorage.isNotEmpty) {
+      if (mounted) setState(() => _togetherApiKey = fromStorage);
+      return fromStorage;
+    }
+
+    if (!mounted) return null;
+    final entered = await _showApiKeyDialog(
+      initialOpenAi: _openAiApiKey ?? '',
+      initialTogether: _togetherApiKey ?? '',
+    );
+    if (entered == null) return null;
+    await _saveKeysFromDialogResult(entered);
+    final normalized = entered.togetherApiKey.trim();
+    return normalized.isEmpty ? null : normalized;
   }
 
   Future<void> _onSetApiKeyPressed() async {
-    final current = _openAiApiKey ?? '';
-    final entered = await _showApiKeyDialog(initialValue: current);
+    final entered = await _showApiKeyDialog(
+      initialOpenAi: _openAiApiKey ?? '',
+      initialTogether: _togetherApiKey ?? '',
+    );
     if (entered == null) return;
-
-    if (entered.isEmpty) {
-      await clearStoredOpenAiApiKey();
-      if (!mounted) return;
-      setState(() => _openAiApiKey = null);
-      return;
-    }
-
-    final normalized = entered.trim();
-    await saveStoredOpenAiApiKey(normalized);
-    if (!mounted) return;
-    setState(() => _openAiApiKey = normalized);
+    await _saveKeysFromDialogResult(entered);
   }
 
   Future<void> _onGeneratePressed() async {
     final runId = ++_generationRunSeq;
     final runTimer = Stopwatch()..start();
-    _debugLog('GEN[$runId] Generate pressed');
+    _debugLog('GEN[$runId] Generate GPT-5 scenarios pressed');
 
     final apiKey = await _ensureOpenAiApiKey();
     if (apiKey == null || apiKey.trim().isEmpty) {
@@ -327,14 +428,15 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
 
     final stats = _collectScenarioInputStats();
     _debugLog(
-      'GEN[$runId] Inputs: promptChars=${stats['promptChars']} '
-      'processes=${stats['processes']} flows=${stats['flows']} '
-      'globalParams=${stats['globalParameters']} '
-      'processParamSets=${stats['processParameterSets']} '
-      'processParams=${stats['processParameters']} '
-      'userPayloadBytes=${stats['userPayloadBytes']} '
-      'fullModelBytes=${stats['fullModelBytes']} '
-      'apiBase=$_defaultOpenAiBase apiKey=${_maskApiKey(apiKey)}',
+        'GEN[$runId] Inputs: promptChars=${stats['promptChars']} '
+        'processes=${stats['processes']} flows=${stats['flows']} '
+        'globalParams=${stats['globalParameters']} '
+        'processParamSets=${stats['processParameterSets']} '
+        'processParams=${stats['processParameters']} '
+        'userPayloadBytes=${stats['userPayloadBytes']} '
+        'fullModelBytes=${stats['fullModelBytes']} '
+        'apiBase=$_defaultOpenAiBase model=$_gpt5ModelName '
+        'apiKey=${_maskApiKey(apiKey)}',
     );
     _debugLog('GEN[$runId] Prompt preview: "${_previewPrompt(widget.prompt)}"');
 
@@ -342,15 +444,20 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       _isLoading = true;
       _mergedScenarios = null;
       _rawDeltasByScenario = null;
+      _scenarioModelByName = const {};
+      _generationByModel = const {};
       _functionsUsed = const [];
       _abstention = null;
+      _isOpenWeightMegaRun = false;
     });
 
     try {
       _debugLog('GEN[$runId] Creating controller');
       final controller = LlmScenarioController(
         apiKey: apiKey,
+        model: _gpt5ModelName,
         apiBase: _defaultOpenAiBase,
+        providerLabel: 'OpenAI',
         log: (message) => _debugLog('GEN[$runId] $message'),
       );
       _debugLog('GEN[$runId] Calling generateAndMergeScenarios');
@@ -372,8 +479,19 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
         setState(() {
           _mergedScenarios = null;
           _rawDeltasByScenario = null;
+          _scenarioModelByName = const {};
+          _generationByModel = {
+            _gpt5ModelName: {
+              'status': 'unsupported',
+              'scenario_count': 0,
+              'reason': result.abstention!.reason,
+              if (result.abstention!.requiredCapability != null)
+                'required_capability': result.abstention!.requiredCapability,
+            },
+          };
           _functionsUsed = result.functionsUsed;
           _abstention = result.abstention;
+          _isOpenWeightMegaRun = false;
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -387,11 +505,23 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       }
 
       if (!mounted) return;
+      final scenarioModelByName = <String, String>{
+        for (final scenarioName in result.mergedScenarios.keys)
+          scenarioName.toString(): _gpt5ModelName,
+      };
       setState(() {
         _mergedScenarios = result.mergedScenarios;
         _rawDeltasByScenario = result.rawDeltasByScenario;
+        _scenarioModelByName = scenarioModelByName;
+        _generationByModel = {
+          _gpt5ModelName: {
+            'status': 'success',
+            'scenario_count': result.mergedScenarios.length,
+          },
+        };
         _functionsUsed = result.functionsUsed;
         _abstention = null;
+        _isOpenWeightMegaRun = false;
       });
       final mergeWarnings = _collectMergeWarnings(result.mergedScenarios);
       if (mergeWarnings.isNotEmpty) {
@@ -413,6 +543,15 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       );
       _debugLog('GEN[$runId] StackTrace:\n$st');
       if (!mounted) return;
+      setState(() {
+        _generationByModel = {
+          _gpt5ModelName: {
+            'status': 'error',
+            'scenario_count': 0,
+            'error': e.toString(),
+          },
+        };
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Scenario generation failed: $e')),
       );
@@ -421,6 +560,255 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       _debugLog(
         'GEN[$runId] Finished. totalElapsedMs=${runTimer.elapsedMilliseconds}',
       );
+    }
+  }
+
+  String _shortModelName(String model) {
+    final trimmed = model.trim();
+    if (trimmed.isEmpty) return 'unknown-model';
+    final slash = trimmed.lastIndexOf('/');
+    if (slash < 0 || slash >= trimmed.length - 1) {
+      return trimmed;
+    }
+    return trimmed.substring(slash + 1);
+  }
+
+  String _toScopedScenarioName(String model, String scenarioName) {
+    final cleanedScenario =
+        scenarioName.trim().isEmpty ? 'Scenario' : scenarioName.trim();
+    return '[${_shortModelName(model)}] $cleanedScenario';
+  }
+
+  String _ensureUniqueScenarioName(String preferred, Set<String> existing) {
+    if (!existing.contains(preferred)) return preferred;
+    var n = 2;
+    var candidate = '$preferred (#$n)';
+    while (existing.contains(candidate)) {
+      n += 1;
+      candidate = '$preferred (#$n)';
+    }
+    return candidate;
+  }
+
+  Future<void> _onGenerateOpenWeightsPressed() async {
+    final runId = ++_generationRunSeq;
+    final runTimer = Stopwatch()..start();
+    _debugLog('OW[$runId] Run open-weight models pressed');
+
+    final apiKey = await _ensureTogetherApiKey();
+    if (apiKey == null || apiKey.trim().isEmpty) {
+      _debugLog('OW[$runId] Missing Together AI key, aborting');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Together AI API key is required before running open-weight models.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final stats = _collectScenarioInputStats();
+    _debugLog(
+      'OW[$runId] Inputs: promptChars=${stats['promptChars']} '
+      'processes=${stats['processes']} flows=${stats['flows']} '
+      'globalParams=${stats['globalParameters']} '
+      'processParamSets=${stats['processParameterSets']} '
+      'processParams=${stats['processParameters']} '
+      'userPayloadBytes=${stats['userPayloadBytes']} '
+      'fullModelBytes=${stats['fullModelBytes']} '
+      'apiBase=$_defaultTogetherApiBase '
+      'models=${_openWeightModels.length} apiKey=${_maskApiKey(apiKey)}',
+    );
+    _debugLog('OW[$runId] Prompt preview: "${_previewPrompt(widget.prompt)}"');
+
+    setState(() {
+      _isLoading = true;
+      _mergedScenarios = null;
+      _rawDeltasByScenario = null;
+      _scenarioModelByName = const {};
+      _generationByModel = const {};
+      _functionsUsed = const [];
+      _abstention = null;
+      _isOpenWeightMegaRun = true;
+    });
+
+    final mergedAll = <String, dynamic>{};
+    final rawAll = <String, List<Map<String, dynamic>>>{};
+    final scenarioModelByName = <String, String>{};
+    final generationByModel = <String, Map<String, dynamic>>{};
+    final functionsUsed = <String>{};
+    final unsupportedModels = <String>[];
+    final failedModels = <String>[];
+
+    for (final modelName in _openWeightModels) {
+      final modelTimer = Stopwatch()..start();
+      _debugLog('OW[$runId] Starting model="$modelName"');
+      try {
+        final controller = LlmScenarioController(
+          apiKey: apiKey,
+          model: modelName,
+          apiBase: _defaultTogetherApiBase,
+          providerLabel: 'Together AI',
+          log: (message) => _debugLog('OW[$runId][$modelName] $message'),
+        );
+        final result = await controller.generateAndMergeScenarios(
+          prompt: widget.prompt,
+          processes: widget.processes,
+          flows: widget.flows,
+          parameters: widget.parameters,
+        );
+
+        modelTimer.stop();
+        _debugLog(
+          'OW[$runId] model="$modelName" finished in ${modelTimer.elapsedMilliseconds}ms '
+          'scenarios=${result.mergedScenarios.length} unsupported=${result.isUnsupported}',
+        );
+
+        functionsUsed.addAll(result.functionsUsed);
+
+        if (result.abstention != null) {
+          generationByModel[modelName] = {
+            'status': 'unsupported',
+            'scenario_count': 0,
+            'reason': result.abstention!.reason,
+            if (result.abstention!.requiredCapability != null)
+              'required_capability': result.abstention!.requiredCapability,
+          };
+          unsupportedModels
+              .add('${_shortModelName(modelName)}: ${result.abstention!.reason}');
+          continue;
+        }
+
+        for (final entry in result.mergedScenarios.entries) {
+          final sourceScenario = entry.key.toString();
+          final preferredName = _toScopedScenarioName(modelName, sourceScenario);
+          final scopedName =
+              _ensureUniqueScenarioName(preferredName, mergedAll.keys.toSet());
+          mergedAll[scopedName] = entry.value;
+          rawAll[scopedName] = result.rawDeltasByScenario[sourceScenario] ??
+              const <Map<String, dynamic>>[];
+          scenarioModelByName[scopedName] = modelName;
+        }
+        generationByModel[modelName] = {
+          'status': 'success',
+          'scenario_count': result.mergedScenarios.length,
+        };
+      } catch (e, st) {
+        modelTimer.stop();
+        _debugLog(
+          'OW[$runId] model="$modelName" failed after ${modelTimer.elapsedMilliseconds}ms: $e',
+        );
+        _debugLog('OW[$runId] model="$modelName" StackTrace:\n$st');
+        generationByModel[modelName] = {
+          'status': 'error',
+          'scenario_count': 0,
+          'error': e.toString(),
+        };
+        failedModels.add('${_shortModelName(modelName)}: $e');
+      }
+    }
+
+    if (!mounted) return;
+
+    if (mergedAll.isEmpty) {
+      final summaryParts = <String>[];
+      if (unsupportedModels.isNotEmpty) {
+        summaryParts.add('Unsupported: ${unsupportedModels.join(' | ')}');
+      }
+      if (failedModels.isNotEmpty) {
+        summaryParts.add('Failed: ${failedModels.join(' | ')}');
+      }
+      final summary = summaryParts.isEmpty
+          ? 'No scenarios were produced.'
+          : summaryParts.join(' ');
+
+      setState(() {
+        _isLoading = false;
+        _mergedScenarios = null;
+        _rawDeltasByScenario = null;
+        _scenarioModelByName = const {};
+        _generationByModel = generationByModel;
+        _functionsUsed = const [];
+        _isOpenWeightMegaRun = false;
+        _abstention = LlmScenarioAbstention(
+          reason: 'No open-weight model produced scenarios. $summary',
+          requiredCapability:
+              'At least one Together-hosted model must return a supported scenario delta response.',
+        );
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Open-weight run completed with no usable scenarios. Check logs for details.',
+          ),
+          duration: Duration(seconds: 8),
+        ),
+      );
+      return;
+    }
+
+    final mergedWarnings = _collectMergeWarnings(mergedAll);
+    final sortedFunctions = functionsUsed.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+    setState(() {
+      _mergedScenarios = mergedAll;
+      _rawDeltasByScenario = rawAll;
+      _scenarioModelByName = scenarioModelByName;
+      _generationByModel = generationByModel;
+      _functionsUsed = sortedFunctions;
+      _abstention = null;
+      _isOpenWeightMegaRun = true;
+    });
+
+    if (mergedWarnings.isNotEmpty) {
+      debugPrint(
+        '[LCA] open-weight merge warnings:\n${mergedWarnings.map((w) => ' - $w').join('\n')}',
+      );
+    }
+
+    final noteParts = <String>[
+      'Open-weight generation finished: ${mergedAll.length} scenario(s)',
+      'from ${scenarioModelByName.values.toSet().length} model(s).',
+    ];
+    if (unsupportedModels.isNotEmpty) {
+      noteParts.add('Unsupported models: ${unsupportedModels.length}.');
+    }
+    if (failedModels.isNotEmpty) {
+      noteParts.add('Failed models: ${failedModels.length}.');
+    }
+    if (mergedWarnings.isNotEmpty) {
+      noteParts.add('Merge warnings: ${mergedWarnings.length}.');
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(noteParts.join(' ')),
+        duration: const Duration(seconds: 8),
+      ),
+    );
+
+    _debugLog(
+      'OW[$runId] Finished. totalElapsedMs=${runTimer.elapsedMilliseconds} '
+      'scenarioCount=${mergedAll.length} '
+      'modelsWithScenarios=${scenarioModelByName.values.toSet().length} '
+      'unsupportedModels=${unsupportedModels.length} failedModels=${failedModels.length}',
+    );
+
+    if (failedModels.isNotEmpty) {
+      _debugLog('OW[$runId] Failed models detail: ${failedModels.join(' | ')}');
+    }
+    if (unsupportedModels.isNotEmpty) {
+      _debugLog(
+        'OW[$runId] Unsupported models detail: ${unsupportedModels.join(' | ')}',
+      );
+    }
+
+    if (mounted) {
+      setState(() => _isLoading = false);
     }
   }
 
@@ -808,10 +1196,16 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       lcaResults: results,
       productSystemName: productSystemName,
       impactMethodName: impactMethodName,
+      scenarioModelByName: _scenarioModelByName,
+      generationRouteLabel:
+          _isOpenWeightMegaRun ? 'Together AI open-weight mega run' : 'GPT-5',
+      generationByModel: _generationByModel,
     );
     await downloadPdf(
       bytes: pdfBytes,
-      filename: 'lca_results_report.pdf',
+      filename: _isOpenWeightMegaRun
+          ? 'lca_results_mega_run_report.pdf'
+          : 'lca_results_report.pdf',
     );
   }
 
@@ -835,9 +1229,12 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
               impactMethodName.trim().isEmpty ? null : impactMethodName,
         );
         if (!mounted) return;
+        final exportedName = _isOpenWeightMegaRun
+            ? 'lca_results_mega_run_report.pdf'
+            : 'lca_results_report.pdf';
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('PDF exported as lca_results_report.pdf'),
+          SnackBar(
+            content: Text('PDF exported as $exportedName'),
           ),
         );
       } catch (e) {
@@ -860,6 +1257,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           rawDeltasByScenario: _rawDeltasByScenario,
           productSystemName: productSystemName,
           impactMethodName: impactMethodName,
+          scenarioModelByName: _scenarioModelByName,
+          generationRouteLabel:
+              _isOpenWeightMegaRun ? 'Together AI open-weight mega run' : 'GPT-5',
+          generationByModel: _generationByModel,
         ),
       ),
     );
@@ -1181,18 +1582,32 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
                           style: const TextStyle(
                               fontSize: 13, fontStyle: FontStyle.italic),
                         ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Together key: ${_maskApiKey(_togetherApiKey)}',
+                          style: const TextStyle(
+                              fontSize: 13, fontStyle: FontStyle.italic),
+                        ),
                         const SizedBox(height: 12),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
+                        Wrap(
+                          spacing: 10,
+                          runSpacing: 10,
+                          alignment: WrapAlignment.center,
                           children: [
                             ElevatedButton(
                               onPressed: _onGeneratePressed,
-                              child: const Text('Generate scenarios'),
+                              child:
+                                  const Text('Generate scenarios using GPT-5'),
                             ),
-                            const SizedBox(width: 10),
+                            OutlinedButton(
+                              onPressed: _onGenerateOpenWeightsPressed,
+                              child: const Text(
+                                'Run open-weight models (Together AI)',
+                              ),
+                            ),
                             OutlinedButton(
                               onPressed: _onSetApiKeyPressed,
-                              child: const Text('Set API key'),
+                              child: const Text('Set API keys'),
                             ),
                           ],
                         ),
@@ -1272,15 +1687,31 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
                             OutlinedButton.icon(
                               onPressed: _onGeneratePressed,
                               icon: const Icon(Icons.refresh),
-                              label: const Text('Regenerate scenarios'),
+                              label: const Text('Regenerate using GPT-5'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: _onGenerateOpenWeightsPressed,
+                              icon: const Icon(Icons.auto_awesome),
+                              label: const Text('Run Open-Weight Models'),
                             ),
                             OutlinedButton.icon(
                               onPressed: _onSetApiKeyPressed,
                               icon: const Icon(Icons.key),
-                              label: const Text('API key'),
+                              label: const Text('API keys'),
                             ),
                           ],
                         ),
+                        if (_isOpenWeightMegaRun) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            'Current scenario set is a Together AI open-weight mega run '
+                            '(${_scenarioModelByName.values.toSet().length} model(s)).',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        ],
                         if (_selectedOpenLcaProductSystem != null ||
                             _selectedOpenLcaImpactMethod != null) ...[
                           const SizedBox(height: 8),
@@ -1300,6 +1731,16 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       ),
     );
   }
+}
+
+class _ApiKeyDialogResult {
+  final String openAiKey;
+  final String togetherApiKey;
+
+  const _ApiKeyDialogResult({
+    required this.openAiKey,
+    required this.togetherApiKey,
+  });
 }
 
 // small summary tile used in the header card

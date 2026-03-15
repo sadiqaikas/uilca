@@ -56,7 +56,8 @@ typedef DistanceOneToManyHandler = Map<String, dynamic> Function(
   Map<String, dynamic> args,
 );
 
-/// Handles building LCA models for LLM, calling OpenAI, and merging scenarios.
+/// Handles building LCA models for LLM, calling a chat-completions API,
+/// and merging scenarios.
 class LlmScenarioController {
   static const String _defaultOpenAiBase = 'https://api.openai.com/v1';
   static const String _controllerRevision = 'rev-2026-03-09-validation-hardening';
@@ -77,6 +78,7 @@ class LlmScenarioController {
   final String apiKey;
   final String model;
   final String apiBase;
+  final String providerLabel;
 
   /// Optional logger. If null, prints are used.
   final void Function(String message)? log;
@@ -89,6 +91,7 @@ class LlmScenarioController {
     this.apiKey = _defaultApiKey,
     this.model = 'gpt-5', // default to GPT-5
     this.apiBase = 'https://api.openai.com/v1',
+    this.providerLabel = 'OpenAI',
     this.log,
     this.distanceOneToManyHandler,
   });
@@ -128,7 +131,9 @@ class LlmScenarioController {
     String normalized =
         raw.endsWith('/') ? raw.substring(0, raw.length - 1) : raw;
     if ((parsed.host == 'api.openai.com' ||
-            parsed.host.endsWith('.openai.com')) &&
+            parsed.host.endsWith('.openai.com') ||
+            parsed.host == 'api.together.xyz' ||
+            parsed.host.endsWith('.together.xyz')) &&
         (parsed.path.isEmpty || parsed.path == '/')) {
       normalized = '$normalized/v1';
     }
@@ -148,9 +153,19 @@ class LlmScenarioController {
     if (!kIsWeb || !error.message.toLowerCase().contains('failed to fetch')) {
       return '';
     }
-    return ' Browser blocked the request before OpenAI returned a response. '
+    return ' Browser blocked the request before $providerLabel returned a response. '
         'Check browser Network tab for blocked OPTIONS/POST, disable VPN/ad-block extensions, '
         'verify DNS can resolve ${uri.host}, and verify your API key is valid and not restricted.';
+  }
+
+  bool _errorSuggestsUnsupportedJsonResponseFormat(String body) {
+    final msg = body.toLowerCase();
+    if (!msg.contains('response_format')) return false;
+    return msg.contains('unsupported') ||
+        msg.contains('not supported') ||
+        msg.contains('invalid') ||
+        msg.contains('unknown') ||
+        msg.contains('unrecognized');
   }
 
   /// Builds the model for local merging (includes emissions and parameters)
@@ -214,7 +229,7 @@ class LlmScenarioController {
     final functions = llmFunctions; // defined alongside prompt
 
     // Step 1: initial call
-    _log('[LCA] First OpenAI call. model=$model');
+    _log('[LCA] First $providerLabel call. model=$model');
     final firstResp = await _callOpenAI(
       systemPrompt: systemPrompt,
       userPayload: userPayload,
@@ -264,7 +279,7 @@ class LlmScenarioController {
     );
   }
 
-  /// Calls OpenAI using Chat Completions with modern tool-calling shape.
+  /// Calls a Chat Completions endpoint with modern tool-calling shape.
   /// Keeps behaviour compatible with legacy function calling.
   Future<Map<String, dynamic>> _callOpenAI({
     required String systemPrompt,
@@ -274,6 +289,7 @@ class LlmScenarioController {
     List<Map<String, dynamic>>? messagesOverride,
     bool jsonOnly = false,
     String callLabel = 'default',
+    bool allowJsonResponseFormatFallback = true,
   }) async {
     // Convert legacy functions -> tools
     List<Map<String, dynamic>>? tools;
@@ -317,8 +333,7 @@ class LlmScenarioController {
     final trimmedApiKey = apiKey.trim();
     if (trimmedApiKey.isEmpty) {
       throw Exception(
-        'Missing OpenAI API key. Set it in-app or pass '
-        '--dart-define=OPENAI_API_KEY=...',
+        'Missing $providerLabel API key. Set it in-app before running.',
       );
     }
 
@@ -348,7 +363,7 @@ class LlmScenarioController {
             .timeout(_openAiRequestTimeout);
         sw.stop();
         _log(
-          '[LCA] OpenAI response received. '
+          '[LCA] $providerLabel response received. '
           'callLabel=$callLabel attempt=$attempt elapsedMs=${sw.elapsedMilliseconds}',
         );
         break;
@@ -356,13 +371,13 @@ class LlmScenarioController {
         sw.stop();
         if (attempt >= 2) {
           throw Exception(
-            'OpenAI request timed out [$_controllerRevision]: $e '
+            '$providerLabel request timed out [$_controllerRevision]: $e '
             '(attempts=$attempt, callLabel=$callLabel, bodyBytes=$bodyBytes, '
             'resolvedUri=$uri, apiBaseRaw="$apiBase")',
           );
         }
         _log(
-          '[LCA] Timeout talking to OpenAI. '
+          '[LCA] Timeout talking to $providerLabel. '
           'callLabel=$callLabel attempt=$attempt bodyBytes=$bodyBytes '
           'elapsedMs=${sw.elapsedMilliseconds}. Retrying once...',
         );
@@ -370,19 +385,19 @@ class LlmScenarioController {
         sw.stop();
         if (_shouldRetryClientException(e, attempt)) {
           _log(
-              '[LCA] OpenAI network error. callLabel=$callLabel attempt=$attempt '
+              '[LCA] $providerLabel network error. callLabel=$callLabel attempt=$attempt '
               'elapsedMs=${sw.elapsedMilliseconds}. Retrying once...');
           await Future<void>.delayed(const Duration(milliseconds: 300));
           continue;
         }
         throw Exception(
-          'OpenAI network failure [$_controllerRevision]: $e '
+          '$providerLabel network failure [$_controllerRevision]: $e '
           '(resolvedUri=$uri, apiBaseRaw="$apiBase").'
           '${_webFailedToFetchHint(uri, e)}',
         );
       } catch (e) {
         throw Exception(
-          'OpenAI request failed [$_controllerRevision]: $e '
+          '$providerLabel request failed [$_controllerRevision]: $e '
           '(resolvedUri=$uri, apiBaseRaw="$apiBase")',
         );
       }
@@ -390,7 +405,7 @@ class LlmScenarioController {
 
     if (resp == null) {
       throw Exception(
-        'OpenAI request failed [$_controllerRevision]: no response '
+        '$providerLabel request failed [$_controllerRevision]: no response '
         '(resolvedUri=$uri, apiBaseRaw="$apiBase")',
       );
     }
@@ -398,13 +413,30 @@ class LlmScenarioController {
     _log('[LCA] HTTP status ${resp.statusCode}');
     if (resp.statusCode != 200) {
       _log('[LCA] Error body: ${resp.body}');
-      throw Exception('OpenAI error ${resp.statusCode}: ${resp.body}');
+      if (jsonOnly &&
+          allowJsonResponseFormatFallback &&
+          _errorSuggestsUnsupportedJsonResponseFormat(resp.body)) {
+        _log(
+          '[LCA] $providerLabel rejected response_format=json_object; retrying without response_format',
+        );
+        return _callOpenAI(
+          systemPrompt: systemPrompt,
+          userPayload: userPayload,
+          functions: functions,
+          functionCallMode: functionCallMode,
+          messagesOverride: messagesOverride,
+          jsonOnly: false,
+          callLabel: '${callLabel}_without_response_format',
+          allowJsonResponseFormatFallback: false,
+        );
+      }
+      throw Exception('$providerLabel error ${resp.statusCode}: ${resp.body}');
     }
 
     final decoded = jsonDecode(resp.body) as Map<String, dynamic>;
     final choices = decoded['choices'];
     if (choices is! List || choices.isEmpty) {
-      throw Exception('OpenAI response missing choices');
+      throw Exception('$providerLabel response missing choices');
     }
     _log('[LCA] Response has ${choices.length} choice(s)');
     return decoded;
@@ -424,13 +456,13 @@ class LlmScenarioController {
 
     final functionsUsed = <String>[];
     Map<String, List<Map<String, dynamic>>> rawDeltasByScenario = {};
+    final initialContentText = _extractContentText(message['content']);
 
     // Defensive check for an empty assistant message
     if ((message['tool_calls'] == null ||
             (message['tool_calls'] as List?)?.isEmpty == true) &&
         (message['function_call'] == null) &&
-        (message['content'] == null ||
-            (message['content'] as String?)?.trim().isEmpty == true)) {
+        (initialContentText == null || initialContentText.trim().isEmpty)) {
       _log('[LCA] Assistant returned empty content and no tool calls');
       throw Exception(
           'Assistant returned an empty message. Check model, prompt, or function specs.');
@@ -555,7 +587,7 @@ class LlmScenarioController {
         idx += 1;
       }
 
-      _log('[LCA] Second OpenAI call for final scenarios (JSON only)');
+      _log('[LCA] Second $providerLabel call for final scenarios (JSON only)');
       final secondResp = await _callOpenAI(
         systemPrompt: systemPrompt,
         userPayload: userPayload,
@@ -655,7 +687,7 @@ class LlmScenarioController {
         {'role': 'function', 'name': name, 'content': jsonEncode(toolReturn)},
       ];
 
-      _log('[LCA] Second OpenAI call for final scenarios (JSON only)');
+      _log('[LCA] Second $providerLabel call for final scenarios (JSON only)');
       final secondResp = await _callOpenAI(
         systemPrompt: systemPrompt,
         userPayload: userPayload,
@@ -800,9 +832,11 @@ class LlmScenarioController {
   }
 
   _AssistantPayload _extractAssistantPayloadFromMessage(dynamic message) {
-    final content = message['content'];
-    if (content is! String) {
-      _log('[LCA] Unexpected message content type: ${content.runtimeType}');
+    final contentText = _extractContentText(message['content']);
+    if (contentText == null) {
+      _log(
+        '[LCA] Unexpected message content type: ${message['content']?.runtimeType}',
+      );
       return const _AssistantPayload(
         abstention: LlmScenarioAbstention(
           reason:
@@ -811,7 +845,7 @@ class LlmScenarioController {
         ),
       );
     }
-    final cleaned = _normaliseJsonText(content.trim());
+    final cleaned = _normaliseJsonText(contentText.trim());
     try {
       final decoded = jsonDecode(cleaned);
       if (decoded is! Map) {
@@ -862,6 +896,46 @@ class LlmScenarioController {
         ),
       );
     }
+  }
+
+  String? _extractContentText(dynamic content) {
+    if (content == null) return null;
+    if (content is String) return content;
+    if (content is Map) {
+      final direct = content['text'];
+      if (direct is String) return direct;
+    }
+    if (content is List) {
+      final parts = <String>[];
+      for (final item in content) {
+        if (item is String) {
+          if (item.trim().isNotEmpty) {
+            parts.add(item);
+          }
+          continue;
+        }
+        if (item is! Map) continue;
+        final map = item.cast<dynamic, dynamic>();
+        final type = (map['type'] ?? '').toString().toLowerCase().trim();
+        if (type.isNotEmpty && type != 'text' && type != 'output_text') {
+          continue;
+        }
+        final text = map['text'];
+        if (text is String && text.trim().isNotEmpty) {
+          parts.add(text);
+          continue;
+        }
+        if (text is Map) {
+          final value = text['value'];
+          if (value is String && value.trim().isNotEmpty) {
+            parts.add(value);
+          }
+        }
+      }
+      if (parts.isEmpty) return null;
+      return parts.join('\n');
+    }
+    return null;
   }
 
   _ValidatedScenarioChanges _mapChangesWithValidation(
