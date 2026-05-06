@@ -18,6 +18,9 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from optimizer_backend import register_goal_seek_routes
+from uncertainty_backend import register_uncertainty_routes
+
 try:
     import olca_ipc
     import olca_schema as o
@@ -279,7 +282,21 @@ def list_impact_methods(
             detail=f"Failed to query impact methods from openLCA IPC at {ipc_url}: {exc}",
         ) from exc
 
-    impact_methods = [_ref_to_public_dict(ref) for ref in descriptors]
+    impact_methods = []
+    for ref in descriptors:
+        item = _ref_to_public_dict(ref)
+        try:
+            method = client.get(o.ImpactMethod, uid=ref.id)
+            categories = getattr(method, "impact_categories", None)
+            if categories:
+                item["impact_categories"] = [
+                    _ref_to_public_dict(category)
+                    for category in categories
+                    if category is not None
+                ]
+        except Exception:
+            item["impact_categories"] = []
+        impact_methods.append(item)
     impact_methods.sort(key=lambda item: (item.get("name") or "").lower())
 
     return {
@@ -981,8 +998,10 @@ def _run_single_scenario(
 
     scores: dict[str, float] = {}
     score_units: dict[str, str] = {}
+    score_items: list[dict[str, Any]] = []
     for impact in impacts:
-        label = _impact_label(impact, len(scores) + 1)
+        identity = _impact_identity(impact, len(scores) + 1)
+        label = identity["label"]
         amount = _coerce_float(impact.amount)
         if amount is None:
             amount = 0.0
@@ -990,6 +1009,15 @@ def _run_single_scenario(
         unit = _impact_unit(impact)
         if unit and label not in score_units:
             score_units[label] = unit
+        item: dict[str, Any] = {
+            "indicator": identity["indicator"],
+            "value": amount,
+        }
+        if identity["impact_category_id"]:
+            item["impact_category_id"] = identity["impact_category_id"]
+        if unit:
+            item["unit"] = unit
+        score_items.append(item)
 
     if not scores:
         scores["openlca_result"] = 0.0
@@ -1005,6 +1033,8 @@ def _run_single_scenario(
     }
     if score_units:
         payload["score_units"] = score_units
+    if score_items:
+        payload["score_items"] = score_items
     if functional_units is not None:
         payload["functional_units"] = functional_units
     if param_warnings:
@@ -1012,16 +1042,19 @@ def _run_single_scenario(
     return payload
 
 
-def _impact_label(impact, index: int) -> str:
+def _impact_identity(impact: Any, index: int) -> dict[str, str]:
     category = getattr(impact, "impact_category", None)
+    impact_category_id = ""
+    indicator = ""
     if category is not None:
-        name = (getattr(category, "name", None) or "").strip()
-        if name:
-            return name
-        uid = (getattr(category, "id", None) or "").strip()
-        if uid:
-            return uid
-    return f"impact_{index}"
+        indicator = (getattr(category, "name", None) or "").strip()
+        impact_category_id = (getattr(category, "id", None) or "").strip()
+    label = indicator or impact_category_id or f"impact_{index}"
+    return {
+        "label": label,
+        "indicator": indicator or label,
+        "impact_category_id": impact_category_id,
+    }
 
 
 def _impact_unit(impact: Any) -> str:
@@ -1339,16 +1372,27 @@ def _build_parameter_catalog(client, product_system: Any) -> dict[str, Any] | No
 
     catalog: dict[str, Any] = {
         "global_name_map": {},
+        "global_details": {},
         "process_ids": set(),
         "process_name_map": {},
+        "process_name_ids_map": {},
+        "process_id_to_name": {},
         "process_param_name_map": {},
+        "process_param_details": {},
     }
 
-    def add_global(name: str) -> None:
+    def add_global(name: str, detail: dict[str, Any] | None = None) -> None:
         clean = name.strip()
         if not clean:
             return
         catalog["global_name_map"].setdefault(clean.lower(), clean)
+        if detail is not None:
+            key = clean.lower()
+            existing = catalog["global_details"].get(key)
+            if existing is None or (
+                not existing.get("editable", False) and detail.get("editable", False)
+            ):
+                catalog["global_details"][key] = detail
 
     def add_process(pid: str, pname: str | None = None) -> None:
         process_id = pid.strip()
@@ -1356,12 +1400,24 @@ def _build_parameter_catalog(client, product_system: Any) -> dict[str, Any] | No
             return
         catalog["process_ids"].add(process_id)
         catalog["process_param_name_map"].setdefault(process_id, {})
+        catalog["process_param_details"].setdefault(process_id, {})
         if pname:
             label = pname.strip().lower()
+            catalog["process_id_to_name"][process_id] = pname.strip()
             if label and label not in catalog["process_name_map"]:
                 catalog["process_name_map"][label] = process_id
+            if label:
+                bucket = catalog["process_name_ids_map"].setdefault(label, [])
+                if process_id not in bucket:
+                    bucket.append(process_id)
+        else:
+            catalog["process_id_to_name"].setdefault(process_id, process_id)
 
-    def add_process_param(pid: str, param_name: str) -> None:
+    def add_process_param(
+        pid: str,
+        param_name: str,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
         process_id = pid.strip()
         clean = param_name.strip()
         if not process_id or not clean:
@@ -1369,14 +1425,67 @@ def _build_parameter_catalog(client, product_system: Any) -> dict[str, Any] | No
         add_process(process_id)
         table = catalog["process_param_name_map"].setdefault(process_id, {})
         table.setdefault(clean.lower(), clean)
+        if detail is not None:
+            normalized_detail = {
+                **detail,
+                "process_id": process_id,
+                "process_name": catalog["process_id_to_name"].get(process_id, process_id),
+            }
+            detail_table = catalog["process_param_details"].setdefault(process_id, {})
+            key = clean.lower()
+            existing = detail_table.get(key)
+            if existing is None or (
+                not existing.get("editable", False)
+                and normalized_detail.get("editable", False)
+            ):
+                detail_table[key] = normalized_detail
+
+    def detail_from_parameter_dict(item: dict[str, Any], *, scope: str) -> dict[str, Any]:
+        formula = _clean_text(item.get("formula"))
+        value = _coerce_float(item.get("value"))
+        return {
+            "name": _clean_text(item.get("name")),
+            "scope": scope,
+            "baseline_value": value,
+            "formula": formula,
+            "unit": _clean_text(item.get("unit")),
+            "note": _clean_text(item.get("note")),
+            "editable": value is not None and not formula,
+        }
+
+    def detail_from_raw_parameter(raw_param: Any, *, scope: str) -> dict[str, Any] | None:
+        name = _clean_text(getattr(raw_param, "name", None))
+        if not name:
+            return None
+        formula = _clean_text(getattr(raw_param, "formula", None))
+        value = _coerce_float(getattr(raw_param, "value", None))
+        return {
+            "name": name,
+            "scope": scope,
+            "baseline_value": value,
+            "formula": formula,
+            "unit": _extract_unit_name(getattr(raw_param, "unit", None)),
+            "note": _first_non_empty_text(
+                getattr(raw_param, "description", None),
+                getattr(raw_param, "comment", None),
+            ),
+            "editable": value is not None and not formula,
+        }
 
     set_globals, set_process = _extract_product_system_parameter_sets(product_system)
     for item in set_globals:
-        add_global(str(item.get("name") or ""))
+        add_global(
+            str(item.get("name") or ""),
+            detail_from_parameter_dict(item, scope="global"),
+        )
     for pid, items in set_process.items():
         add_process(pid)
         for item in items:
-            add_process_param(pid, str(item.get("name") or ""))
+            add_process_param(
+                pid,
+                str(item.get("name") or ""),
+                detail_from_parameter_dict(item, scope="process"),
+            )
 
     product_system_id = _extract_ref_id(product_system)
     if product_system_id:
@@ -1387,16 +1496,23 @@ def _build_parameter_catalog(client, product_system: Any) -> dict[str, Any] | No
             if not name:
                 continue
             if context_id:
-                add_process_param(context_id, name)
+                add_process_param(
+                    context_id,
+                    name,
+                    detail_from_raw_parameter(raw_param, scope="process"),
+                )
             else:
-                add_global(name)
+                add_global(name, detail_from_raw_parameter(raw_param, scope="global"))
 
     legacy_globals = _extract_entity_parameters(
         getattr(product_system, "parameters", None),
         default_scope="global",
     )
     for item in legacy_globals:
-        add_global(str(item.get("name") or ""))
+        add_global(
+            str(item.get("name") or ""),
+            detail_from_parameter_dict(item, scope="global"),
+        )
 
     for process_ref in _collect_product_system_process_refs(product_system):
         pid = process_ref.get("id") or ""
@@ -1411,10 +1527,24 @@ def _build_parameter_catalog(client, product_system: Any) -> dict[str, Any] | No
         add_process(pid, _clean_text(getattr(process_entity, "name", None)))
         for param_name in _extract_process_parameter_names(process_entity):
             add_process_param(pid, param_name)
+        inline_params = _extract_entity_parameters(
+            getattr(process_entity, "parameters", None),
+            default_scope="process",
+        )
+        for item in inline_params:
+            add_process_param(
+                pid,
+                str(item.get("name") or ""),
+                detail_from_parameter_dict(item, scope="process"),
+            )
         for raw_param in _safe_get_parameters(client, o.Process, pid):
             name = _clean_text(getattr(raw_param, "name", None))
             if name:
-                add_process_param(pid, name)
+                add_process_param(
+                    pid,
+                    name,
+                    detail_from_raw_parameter(raw_param, scope="process"),
+                )
 
     return catalog
 
@@ -1626,3 +1756,37 @@ def _ref_to_public_dict(ref) -> dict[str, Any]:
         "location": ref.location,
         "library": ref.library,
     }
+
+
+register_goal_seek_routes(
+    app,
+    {
+        "ensure_openlca_available": _ensure_openlca_available,
+        "new_ipc_client": _new_ipc_client,
+        "run_single_scenario": _run_single_scenario,
+        "build_parameter_catalog": _build_parameter_catalog,
+        "pick_impact_method": _pick_impact_method,
+        "coerce_float": _coerce_float,
+        "olca_schema": o,
+        "default_ipc_url": DEFAULT_OPENLCA_IPC_URL,
+        "default_impact_method_id": DEFAULT_IMPACT_METHOD_ID,
+        "default_impact_method_name": DEFAULT_IMPACT_METHOD_NAME,
+    },
+)
+
+register_uncertainty_routes(
+    app,
+    {
+        "ensure_openlca_available": _ensure_openlca_available,
+        "new_ipc_client": _new_ipc_client,
+        "run_single_scenario": _run_single_scenario,
+        "build_parameter_catalog": _build_parameter_catalog,
+        "pick_impact_method": _pick_impact_method,
+        "coerce_float": _coerce_float,
+        "ref_to_public_dict": _ref_to_public_dict,
+        "olca_schema": o,
+        "default_ipc_url": DEFAULT_OPENLCA_IPC_URL,
+        "default_impact_method_id": DEFAULT_IMPACT_METHOD_ID,
+        "default_impact_method_name": DEFAULT_IMPACT_METHOD_NAME,
+    },
+)

@@ -3,11 +3,12 @@
 import 'dart:html' as html;
 import 'dart:typed_data';
 
-Future<void> downloadPdf({
+Future<void> downloadFile({
   required Uint8List bytes,
   required String filename,
+  required String mimeType,
 }) async {
-  final blob = html.Blob([bytes], 'application/pdf');
+  final blob = html.Blob([bytes], mimeType);
   final url = html.Url.createObjectUrlFromBlob(blob);
 
   final anchor = html.AnchorElement(href: url)
@@ -17,4 +18,15 @@ Future<void> downloadPdf({
   anchor.click();
   anchor.remove();
   html.Url.revokeObjectUrl(url);
+}
+
+Future<void> downloadPdf({
+  required Uint8List bytes,
+  required String filename,
+}) {
+  return downloadFile(
+    bytes: bytes,
+    filename: filename,
+    mimeType: 'application/pdf',
+  );
 }

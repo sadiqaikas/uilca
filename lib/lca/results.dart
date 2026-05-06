@@ -3097,6 +3097,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:fl_chart/fl_chart.dart';
 
+import 'package:earlylca/lca/newllm/document_parameterisation.dart';
 import 'package:earlylca/lca/newllm/pdf_download.dart';
 import 'package:earlylca/lca/newllm/report_exporter.dart';
 
@@ -3119,6 +3120,7 @@ class ResultsPage extends StatefulWidget {
   final Map<String, String>? scenarioModelByName;
   final String? generationRouteLabel;
   final Map<String, Map<String, dynamic>>? generationByModel;
+  final List<DocumentExtractionRecord>? documentProvenance;
 
   const ResultsPage({
     required this.results,
@@ -3131,6 +3133,7 @@ class ResultsPage extends StatefulWidget {
     this.scenarioModelByName,
     this.generationRouteLabel,
     this.generationByModel,
+    this.documentProvenance,
     Key? key,
   }) : super(key: key);
 
@@ -3399,6 +3402,7 @@ class _ResultsPageState extends State<ResultsPage> {
         generationByModel:
             widget.generationByModel ??
                 const <String, Map<String, dynamic>>{},
+        documentProvenance: widget.documentProvenance ?? const [],
       );
 
       await downloadPdf(

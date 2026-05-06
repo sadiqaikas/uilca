@@ -3,3 +3,5 @@
 # openLCA IPC backend
 olca-ipc==2.4.0
 olca_schema==2.4.0
+scipy>=1.11
+reportlab>=4.2

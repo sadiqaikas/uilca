@@ -686,63 +686,6 @@
 //   return allChangeLists;
 // }
 
-// /// -------------------------------------------------------------------------------------------------
-// /// 2) Full-System ± X % Uncertainty Sweep
-// ///
-// /// Scale **all** input and output flows in **every** process by ±percent (or by each level in
-// /// `levels`). Returns two (or more) change lists:
-// ///   • One where every flow amount = old × (1 + percent/100)
-// ///   • One where every flow amount = old × (1 − percent/100)
-// /// If you supply `levels: [−10, 0, +10]`, you’ll get three change lists, etc.
-// /// -------------------------------------------------------------------------------------------------
-// List<List<Map<String, dynamic>>> fullSystemUncertainty({
-//   required Map<String, dynamic> baseModel,
-//   double percent = 10.0,
-//   List<double>? levels,
-// }) {
-//   final processes = (baseModel['processes'] as List).cast<Map<String, dynamic>>();
-//   final List<List<Map<String, dynamic>>> allChangeLists = [];
-
-//   // Default to [−percent, +percent] if no custom levels
-//   final List<double> sweepLevels = levels ?? [-percent, percent];
-
-//   for (var lvl in sweepLevels) {
-//     final double deltaPct = lvl / 100.0;
-//     final List<Map<String, dynamic>> changeList = [];
-
-//     for (var proc in processes) {
-//       final String pid = proc['id'] as String;
-
-//       // — Scale every input by (1 + deltaPct) —
-//       for (var inp in (proc['inputs'] as List<dynamic>).cast<Map<String, dynamic>>()) {
-//         final String name = inp['name'] as String;
-//         final double oldAmt = (inp['amount'] as num).toDouble();
-//         final double newAmt = double.parse((oldAmt * (1 + deltaPct)).toStringAsFixed(6));
-//         changeList.add({
-//           'process_id': pid,
-//           'field': 'inputs.$name.amount',
-//           'new_value': newAmt,
-//         });
-//       }
-
-//       // — Scale every output by (1 + deltaPct) —
-//       for (var outp in (proc['outputs'] as List<dynamic>).cast<Map<String, dynamic>>()) {
-//         final String name = outp['name'] as String;
-//         final double oldAmt = (outp['amount'] as num).toDouble();
-//         final double newAmt = double.parse((oldAmt * (1 + deltaPct)).toStringAsFixed(6));
-//         changeList.add({
-//           'process_id': pid,
-//           'field': 'outputs.$name.amount',
-//           'new_value': newAmt,
-//         });
-//       }
-//     }
-
-//     allChangeLists.add(changeList);
-//   }
-
-//   return allChangeLists;
-// }
 // // File: lib/lca_functions.dart  (add or replace the old simplexLatticeDesign)
 
 // /// -------------------------------------------------------------------------------------------------
@@ -879,7 +822,6 @@ import 'newhome/lca_models.dart';
 /// - We only touch parameters that exist in the base model.
 /// - For OFAT we vary one parameter name at a time across all occurrences
 ///   (global occurrence and any per-process occurrences sharing that name).
-/// - For full-system uncertainty we scale every numeric parameter value.
 /// - For simplex-lattice design we redistribute totals across the selected
 ///   parameterNames while preserving per-occurrence proportions.
 
@@ -962,62 +904,7 @@ List<List<Map<String, dynamic>>> oneAtATimeSensitivity({
 }
 
 /// -------------------------------------------------------------------------------------------------
-/// 2) Full-System ±X% Uncertainty Sweep on parameters
-///
-/// Scale every numeric parameter (global and per-process) by ±percent, or by each level in `levels`.
-/// If `levels` is omitted, the sweep is two scenarios: [-percent, +percent].
-/// -------------------------------------------------------------------------------------------------
-List<List<Map<String, dynamic>>> fullSystemUncertainty({
-  required Map<String, dynamic> baseModel,
-  double percent = 10.0,
-  List<double>? levels,
-}) {
-  final params = (baseModel['parameters'] as Map?) ?? const {};
-  final globals = (params['global_parameters'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
-  final procParams =
-      (params['process_parameters'] as Map?)?.cast<String, dynamic>() ?? const <String, dynamic>{};
-  final resolved = _resolveParameterSymbols(params.cast<String, dynamic>());
-
-  final List<List<Map<String, dynamic>>> allChangeLists = [];
-  final List<double> sweepLevels = levels ?? <double>[-percent, percent];
-
-  // Collect all occurrences once
-  final occAll = _collectAllOccurrences(
-    globals,
-    procParams,
-    globalSymbols: resolved.global,
-    processSymbols: resolved.processById,
-  );
-
-  for (final lvl in sweepLevels) {
-    final double factor = 1.0 + (lvl / 100.0);
-    final List<Map<String, dynamic>> changeList = [];
-
-    for (final g in occAll.global) {
-      final double newVal = _round6(g.value * factor);
-      changeList.add({
-        'field': 'parameters.global.${g.name}',
-        'new_value': newVal,
-      });
-    }
-
-    for (final p in occAll.process) {
-      final double newVal = _round6(p.value * factor);
-      changeList.add({
-        'process_id': p.processId,
-        'field': 'parameters.process.${p.name}',
-        'new_value': newVal,
-      });
-    }
-
-    allChangeLists.add(changeList);
-  }
-
-  return allChangeLists;
-}
-
-/// -------------------------------------------------------------------------------------------------
-/// 3) Simplex-Lattice Mixture Design on parameters
+/// 2) Simplex-Lattice Mixture Design on parameters
 ///
 /// Redistribute the combined total of the selected parameter names according to a {q, m}
 /// simplex-lattice design, where q is the count of valid, resolved parameter names and each component takes values

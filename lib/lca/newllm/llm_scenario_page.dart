@@ -10,10 +10,13 @@ import '../../api/openai_api_key_storage.dart';
 
 import '../newhome/lca_models.dart';
 import '../results.dart';
+import 'document_parameterisation.dart';
+import 'goal_seek_page.dart';
 import 'llm_scenario_controller.dart';
 import 'pdf_download.dart';
 import 'report_exporter.dart';
 import 'scenario_graph_view.dart';
+import 'uncertainty_propagation_page.dart';
 
 // Main UI page for generating scenarios with the LLM using the controller.
 // Keeps the delicate parts separated: this file is UI only.
@@ -23,6 +26,7 @@ class LLMScenarioPage extends StatefulWidget {
   final List<Map<String, dynamic>> flows;
   final ParameterSet? parameters;
   final Map<String, dynamic>? openLcaProductSystem;
+  final List<LlmDocumentReference> uploadedDocuments;
 
   const LLMScenarioPage({
     super.key,
@@ -31,6 +35,7 @@ class LLMScenarioPage extends StatefulWidget {
     required this.flows,
     this.parameters,
     this.openLcaProductSystem,
+    this.uploadedDocuments = const [],
   });
 
   @override
@@ -45,6 +50,23 @@ enum _LcaRunMode {
 enum _PostRunAction {
   downloadPdf,
   seeGraphs,
+}
+
+enum _ModelProvider {
+  openai,
+  together,
+}
+
+class _ModelChoice {
+  final String model;
+  final _ModelProvider provider;
+  final String label;
+
+  const _ModelChoice({
+    required this.model,
+    required this.provider,
+    required this.label,
+  });
 }
 
 class _LLMScenarioPageState extends State<LLMScenarioPage> {
@@ -96,9 +118,26 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
   Map<String, String> _scenarioModelByName = const {};
   Map<String, Map<String, dynamic>> _generationByModel = const {};
   List<String> _functionsUsed = const [];
+  List<DocumentExtractionRecord> _documentProvenance = const [];
   LlmScenarioAbstention? _abstention;
   bool _isOpenWeightMegaRun = false;
   int _generationRunSeq = 0;
+  Set<String> _selectedModels = const {};
+  String _generationRouteLabel = 'GPT-5';
+
+  List<_ModelChoice> _availableModelChoices() => [
+        const _ModelChoice(
+          model: _gpt5ModelName,
+          provider: _ModelProvider.openai,
+          label: 'GPT-5 (OpenAI)',
+        ),
+        for (final model in _openWeightModels)
+          _ModelChoice(
+            model: model,
+            provider: _ModelProvider.together,
+            label: '${_shortModelName(model)} (Together)',
+          ),
+      ];
 
   void _debugLog(String message) {
     final timestamp = DateTime.now().toIso8601String();
@@ -122,16 +161,19 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
             .fold<int>(0, (sum, params) => sum + params.length) ??
         0;
 
-    final baseModelForLlm = {
-      'processes': widget.processes
-          .map((p) => p.copyWithFields(emissions: const <FlowValue>[]).toJson())
-          .toList(),
-      'flows': widget.flows,
-      if (widget.parameters != null) 'parameters': widget.parameters!.toJson(),
-    };
+    final modelContextForLlm = LlmScenarioController.buildModelContextForLLM(
+      widget.processes,
+      widget.parameters,
+    );
     final userPayload = {
       'scenario_prompt': widget.prompt,
-      'baseModel': baseModelForLlm,
+      'model_context': modelContextForLlm,
+      if (widget.uploadedDocuments.isNotEmpty)
+        'document_context': {
+          'documents': widget.uploadedDocuments
+              .map((document) => document.toPromptContextJson())
+              .toList(),
+        },
     };
 
     final baseModelFull = {
@@ -147,6 +189,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       'globalParameters': globalCount,
       'processParameterSets': processSetCount,
       'processParameters': processParamCount,
+      'documents': widget.uploadedDocuments.length,
       'userPayloadBytes': utf8.encode(jsonEncode(userPayload)).length,
       'fullModelBytes': utf8.encode(jsonEncode(baseModelFull)).length,
     };
@@ -161,9 +204,55 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     }
   }
 
+  List<String> _openLcaBackendCandidates() {
+    final configured = _openLcaBackendBaseUrl.trim();
+    final candidates = <String>[];
+    void add(String value) {
+      final v = value.trim();
+      if (v.isNotEmpty && !candidates.contains(v)) {
+        candidates.add(v);
+      }
+    }
+
+    add(configured);
+    add(configured.replaceAll('localhost', '127.0.0.1'));
+    add(configured.replaceAll('127.0.0.1', 'localhost'));
+    return candidates;
+  }
+
+  Future<http.Response> _getFromOpenLcaBridge(
+    String path, {
+    Map<String, String>? queryParameters,
+  }) async {
+    Object? lastError;
+    for (final base in _openLcaBackendCandidates()) {
+      final uri = Uri.parse('$base$path').replace(queryParameters: queryParameters);
+      _guardWebMixedContent(uri);
+      try {
+        final response = await http.get(
+          uri,
+          headers: const {'Accept': 'application/json'},
+        );
+        if (response.statusCode == 200) {
+          return response;
+        }
+        lastError = Exception(
+          'OpenLCA backend error ${response.statusCode}: ${response.body}',
+        );
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw Exception(
+      'OpenLCA bridge unreachable on ${_openLcaBackendCandidates().join(', ')}. '
+      'Last error: $lastError',
+    );
+  }
+
   @override
   void initState() {
     super.initState();
+    _selectedModels = {_gpt5ModelName};
     _primeApiKeys();
     final selected = widget.openLcaProductSystem;
     if (selected != null) {
@@ -409,6 +498,305 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     await _saveKeysFromDialogResult(entered);
   }
 
+  Future<void> _selectModelsDialog() async {
+    final available = _availableModelChoices();
+    final current = _selectedModels.toSet();
+    final selected = await showDialog<Set<String>>(
+      context: context,
+      builder: (dialogContext) {
+        final working = current.toSet();
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final openAiChoices =
+                available.where((c) => c.provider == _ModelProvider.openai);
+            final togetherChoices =
+                available.where((c) => c.provider == _ModelProvider.together);
+            return AlertDialog(
+              title: const Text('Select models'),
+              content: SizedBox(
+                width: 520,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('OpenAI'),
+                      const SizedBox(height: 6),
+                      for (final choice in openAiChoices)
+                        CheckboxListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          value: working.contains(choice.model),
+                          title: Text(choice.label),
+                          onChanged: (value) {
+                            setDialogState(() {
+                              if (value == true) {
+                                working.add(choice.model);
+                              } else {
+                                working.remove(choice.model);
+                              }
+                            });
+                          },
+                        ),
+                      const SizedBox(height: 10),
+                      const Text('Together'),
+                      const SizedBox(height: 6),
+                      for (final choice in togetherChoices)
+                        CheckboxListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          value: working.contains(choice.model),
+                          title: Text(choice.label),
+                          onChanged: (value) {
+                            setDialogState(() {
+                              if (value == true) {
+                                working.add(choice.model);
+                              } else {
+                                working.remove(choice.model);
+                              }
+                            });
+                          },
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(null),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(<String>{_gpt5ModelName}),
+                  child: const Text('GPT only'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(working),
+                  child: const Text('Use selected'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (!mounted || selected == null) return;
+    setState(() {
+      _selectedModels = selected.isEmpty ? {_gpt5ModelName} : selected;
+    });
+  }
+
+  String _selectedModelsLabel() {
+    if (_selectedModels.isEmpty) return 'GPT-5';
+    if (_selectedModels.length == 1 && _selectedModels.contains(_gpt5ModelName)) {
+      return 'GPT-5';
+    }
+    final names = _selectedModels.map(_shortModelName).toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return names.join(', ');
+  }
+
+  Future<void> _onGenerateSelectedModelsPressed() async {
+    final selected = _selectedModels.toList();
+    if (selected.isEmpty) return;
+
+    // Preserve existing behavior for GPT-only runs.
+    if (selected.length == 1 && selected.first == _gpt5ModelName) {
+      await _onGeneratePressed();
+      return;
+    }
+
+    final wantsOpenAi = selected.contains(_gpt5ModelName);
+    final wantsTogether =
+        selected.any((model) => model != _gpt5ModelName);
+
+    String? openAiKey;
+    if (wantsOpenAi) {
+      openAiKey = await _ensureOpenAiApiKey();
+      if (openAiKey == null || openAiKey.trim().isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('OpenAI API key is required for GPT-5 runs.'),
+          ),
+        );
+        return;
+      }
+    }
+
+    String? togetherKey;
+    if (wantsTogether) {
+      togetherKey = await _ensureTogetherApiKey();
+      if (togetherKey == null || togetherKey.trim().isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content:
+                Text('Together AI API key is required for Together-hosted runs.'),
+          ),
+        );
+        return;
+      }
+    }
+
+    final runId = ++_generationRunSeq;
+    final runTimer = Stopwatch()..start();
+    _debugLog('SEL[$runId] Run selected models pressed: ${selected.join(', ')}');
+
+    setState(() {
+      _isLoading = true;
+      _mergedScenarios = null;
+      _rawDeltasByScenario = null;
+      _scenarioModelByName = const {};
+      _generationByModel = const {};
+      _functionsUsed = const [];
+      _documentProvenance = const [];
+      _abstention = null;
+      _isOpenWeightMegaRun = selected.length > 1 || wantsTogether;
+      _generationRouteLabel = selected.length == 1 && wantsOpenAi && !wantsTogether
+          ? 'GPT-5'
+          : (wantsTogether && !wantsOpenAi
+              ? 'Together AI selected models'
+              : 'Multi-model selected run');
+    });
+
+    final mergedAll = <String, dynamic>{};
+    final rawAll = <String, List<Map<String, dynamic>>>{};
+    final scenarioModelByName = <String, String>{};
+    final generationByModel = <String, Map<String, dynamic>>{};
+    final functionsUsed = <String>{};
+    final documentProvenance = <DocumentExtractionRecord>[];
+    final unsupportedModels = <String>[];
+    final failedModels = <String>[];
+
+    for (final modelName in selected) {
+      final modelTimer = Stopwatch()..start();
+      _debugLog('SEL[$runId] Starting model="$modelName"');
+      try {
+        final isOpenAi = modelName == _gpt5ModelName;
+        final controller = LlmScenarioController(
+          apiKey: isOpenAi ? openAiKey! : togetherKey!,
+          model: modelName,
+          apiBase: isOpenAi ? _defaultOpenAiBase : _defaultTogetherApiBase,
+          providerLabel: isOpenAi ? 'OpenAI' : 'Together AI',
+          log: (message) => _debugLog('SEL[$runId][$modelName] $message'),
+        );
+        final result = await controller.generateAndMergeScenarios(
+          prompt: widget.prompt,
+          processes: widget.processes,
+          flows: widget.flows,
+          parameters: widget.parameters,
+          uploadedDocuments: widget.uploadedDocuments,
+        );
+
+        modelTimer.stop();
+        _debugLog(
+          'SEL[$runId] model="$modelName" finished in ${modelTimer.elapsedMilliseconds}ms '
+          'scenarios=${result.mergedScenarios.length} unsupported=${result.isUnsupported}',
+        );
+
+        functionsUsed.addAll(result.functionsUsed);
+        documentProvenance.addAll(result.documentProvenance);
+
+        if (result.abstention != null) {
+          generationByModel[modelName] = {
+            'status': 'unsupported',
+            'scenario_count': 0,
+            'reason': result.abstention!.reason,
+            if (result.abstention!.requiredCapability != null)
+              'required_capability': result.abstention!.requiredCapability,
+          };
+          unsupportedModels.add('${_shortModelName(modelName)}: ${result.abstention!.reason}');
+          continue;
+        }
+
+        for (final entry in result.mergedScenarios.entries) {
+          final sourceScenario = entry.key.toString();
+          final preferredName = selected.length > 1
+              ? _toScopedScenarioName(modelName, sourceScenario)
+              : sourceScenario;
+          final scopedName =
+              _ensureUniqueScenarioName(preferredName, mergedAll.keys.toSet());
+          mergedAll[scopedName] = entry.value;
+          rawAll[scopedName] = result.rawDeltasByScenario[sourceScenario] ??
+              const <Map<String, dynamic>>[];
+          scenarioModelByName[scopedName] = modelName;
+        }
+        generationByModel[modelName] = {
+          'status': 'success',
+          'scenario_count': result.mergedScenarios.length,
+        };
+      } catch (e) {
+        modelTimer.stop();
+        _debugLog(
+          'SEL[$runId] model="$modelName" failed after ${modelTimer.elapsedMilliseconds}ms: $e',
+        );
+        generationByModel[modelName] = {
+          'status': 'error',
+          'scenario_count': 0,
+          'error': e.toString(),
+        };
+        failedModels.add('${_shortModelName(modelName)}: $e');
+      }
+    }
+
+    if (!mounted) return;
+
+    if (mergedAll.isEmpty) {
+      final summaryParts = <String>[];
+      if (unsupportedModels.isNotEmpty) {
+        summaryParts.add('Unsupported: ${unsupportedModels.join(' | ')}');
+      }
+      if (failedModels.isNotEmpty) {
+        summaryParts.add('Failed: ${failedModels.join(' | ')}');
+      }
+      final summary = summaryParts.isEmpty
+          ? 'No scenarios were produced.'
+          : summaryParts.join(' ');
+      setState(() {
+        _isLoading = false;
+        _mergedScenarios = null;
+        _rawDeltasByScenario = null;
+        _scenarioModelByName = const {};
+        _generationByModel = generationByModel;
+        _functionsUsed = const [];
+        _documentProvenance = const [];
+        _abstention = LlmScenarioAbstention(
+          reason: 'No selected model produced scenarios. $summary',
+          requiredCapability:
+              'At least one selected model must return a supported scenario delta response.',
+        );
+      });
+      return;
+    }
+
+    final sortedFunctions = functionsUsed.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+    setState(() {
+      _mergedScenarios = mergedAll;
+      _rawDeltasByScenario = rawAll;
+      _scenarioModelByName = scenarioModelByName;
+      _generationByModel = generationByModel;
+      _functionsUsed = sortedFunctions;
+      _documentProvenance = documentProvenance;
+      _abstention = null;
+      _isOpenWeightMegaRun = selected.length > 1 || wantsTogether;
+      _generationRouteLabel = selected.length == 1 && wantsOpenAi && !wantsTogether
+          ? 'GPT-5'
+          : (wantsTogether && !wantsOpenAi
+              ? 'Together AI selected models'
+              : 'Multi-model selected run');
+      _isLoading = false;
+    });
+
+    _debugLog(
+      'SEL[$runId] Finished. totalElapsedMs=${runTimer.elapsedMilliseconds} '
+      'scenarioCount=${mergedAll.length} modelsSelected=${selected.length}',
+    );
+  }
+
   Future<void> _onGeneratePressed() async {
     final runId = ++_generationRunSeq;
     final runTimer = Stopwatch()..start();
@@ -433,6 +821,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
         'globalParams=${stats['globalParameters']} '
         'processParamSets=${stats['processParameterSets']} '
         'processParams=${stats['processParameters']} '
+        'documents=${stats['documents']} '
         'userPayloadBytes=${stats['userPayloadBytes']} '
         'fullModelBytes=${stats['fullModelBytes']} '
         'apiBase=$_defaultOpenAiBase model=$_gpt5ModelName '
@@ -447,11 +836,14 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       _scenarioModelByName = const {};
       _generationByModel = const {};
       _functionsUsed = const [];
+      _documentProvenance = const [];
       _abstention = null;
       _isOpenWeightMegaRun = false;
     });
 
     try {
+      final optimizationContext =
+          await _loadOptimizationContextForLlm('GEN[$runId]');
       _debugLog('GEN[$runId] Creating controller');
       final controller = LlmScenarioController(
         apiKey: apiKey,
@@ -466,12 +858,15 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
         processes: widget.processes,
         flows: widget.flows,
         parameters: widget.parameters,
+        optimizationContext: optimizationContext,
+        uploadedDocuments: widget.uploadedDocuments,
       );
       _debugLog(
         'GEN[$runId] Completed in ${runTimer.elapsedMilliseconds}ms '
         'scenarios=${result.mergedScenarios.length} '
         'functionsUsed=${result.functionsUsed.join(',')} '
-        'unsupported=${result.isUnsupported}',
+        'unsupported=${result.isUnsupported} '
+        'optimization=${result.isOptimization}',
       );
 
       if (result.abstention != null) {
@@ -490,8 +885,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
             },
           };
           _functionsUsed = result.functionsUsed;
+          _documentProvenance = result.documentProvenance;
           _abstention = result.abstention;
           _isOpenWeightMegaRun = false;
+          _generationRouteLabel = 'GPT-5';
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -501,6 +898,55 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
             duration: const Duration(seconds: 7),
           ),
         );
+        return;
+      }
+
+      if (result.optimizationPayload != null) {
+        if (!mounted) return;
+        setState(() {
+          _isLoading = false;
+          _mergedScenarios = null;
+          _rawDeltasByScenario = null;
+          _scenarioModelByName = const {};
+          _generationByModel = {
+            _gpt5ModelName: {
+              'status': 'optimization',
+              'scenario_count': 0,
+            },
+          };
+          _functionsUsed = [...result.functionsUsed, 'goalSeekOptimization'];
+          _documentProvenance = result.documentProvenance;
+          _abstention = null;
+          _isOpenWeightMegaRun = false;
+          _generationRouteLabel = 'GPT-5';
+        });
+        await _openGeneratedGoalSeek(result.optimizationPayload!);
+        return;
+      }
+
+      if (result.uncertaintyPayload != null) {
+        if (!mounted) return;
+        setState(() {
+          _isLoading = false;
+          _mergedScenarios = null;
+          _rawDeltasByScenario = null;
+          _scenarioModelByName = const {};
+          _generationByModel = {
+            _gpt5ModelName: {
+              'status': 'uncertainty_propagation',
+              'scenario_count': 0,
+            },
+          };
+          _functionsUsed = [
+            ...result.functionsUsed,
+            'uncertaintyPropagation',
+          ];
+          _documentProvenance = result.documentProvenance;
+          _abstention = null;
+          _isOpenWeightMegaRun = false;
+          _generationRouteLabel = 'GPT-5';
+        });
+        await _openGeneratedUncertaintyPropagation(result.uncertaintyPayload!);
         return;
       }
 
@@ -520,8 +966,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           },
         };
         _functionsUsed = result.functionsUsed;
+        _documentProvenance = result.documentProvenance;
         _abstention = null;
         _isOpenWeightMegaRun = false;
+        _generationRouteLabel = 'GPT-5';
       });
       final mergeWarnings = _collectMergeWarnings(result.mergedScenarios);
       if (mergeWarnings.isNotEmpty) {
@@ -614,11 +1062,12 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       'OW[$runId] Inputs: promptChars=${stats['promptChars']} '
       'processes=${stats['processes']} flows=${stats['flows']} '
       'globalParams=${stats['globalParameters']} '
-      'processParamSets=${stats['processParameterSets']} '
-      'processParams=${stats['processParameters']} '
-      'userPayloadBytes=${stats['userPayloadBytes']} '
-      'fullModelBytes=${stats['fullModelBytes']} '
-      'apiBase=$_defaultTogetherApiBase '
+        'processParamSets=${stats['processParameterSets']} '
+        'processParams=${stats['processParameters']} '
+        'documents=${stats['documents']} '
+        'userPayloadBytes=${stats['userPayloadBytes']} '
+        'fullModelBytes=${stats['fullModelBytes']} '
+        'apiBase=$_defaultTogetherApiBase '
       'models=${_openWeightModels.length} apiKey=${_maskApiKey(apiKey)}',
     );
     _debugLog('OW[$runId] Prompt preview: "${_previewPrompt(widget.prompt)}"');
@@ -630,8 +1079,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       _scenarioModelByName = const {};
       _generationByModel = const {};
       _functionsUsed = const [];
+      _documentProvenance = const [];
       _abstention = null;
       _isOpenWeightMegaRun = true;
+      _generationRouteLabel = 'Together AI open-weight mega run';
     });
 
     final mergedAll = <String, dynamic>{};
@@ -639,6 +1090,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     final scenarioModelByName = <String, String>{};
     final generationByModel = <String, Map<String, dynamic>>{};
     final functionsUsed = <String>{};
+    final documentProvenance = <DocumentExtractionRecord>[];
     final unsupportedModels = <String>[];
     final failedModels = <String>[];
 
@@ -658,6 +1110,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           processes: widget.processes,
           flows: widget.flows,
           parameters: widget.parameters,
+          uploadedDocuments: widget.uploadedDocuments,
         );
 
         modelTimer.stop();
@@ -667,6 +1120,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
         );
 
         functionsUsed.addAll(result.functionsUsed);
+        documentProvenance.addAll(result.documentProvenance);
 
         if (result.abstention != null) {
           generationByModel[modelName] = {
@@ -731,6 +1185,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
         _scenarioModelByName = const {};
         _generationByModel = generationByModel;
         _functionsUsed = const [];
+        _documentProvenance = const [];
         _isOpenWeightMegaRun = false;
         _abstention = LlmScenarioAbstention(
           reason: 'No open-weight model produced scenarios. $summary',
@@ -760,8 +1215,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       _scenarioModelByName = scenarioModelByName;
       _generationByModel = generationByModel;
       _functionsUsed = sortedFunctions;
+      _documentProvenance = documentProvenance;
       _abstention = null;
       _isOpenWeightMegaRun = true;
+      _generationRouteLabel = 'Together AI open-weight mega run';
     });
 
     if (mergedWarnings.isNotEmpty) {
@@ -963,23 +1420,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
   }
 
   Future<List<Map<String, dynamic>>> _fetchOpenLcaProductSystems() async {
-    final uri = Uri.parse(
-      '$_openLcaBackendBaseUrl/openlca/product-systems',
-    ).replace(
+    final response = await _getFromOpenLcaBridge(
+      '/openlca/product-systems',
       queryParameters: {'ipc_url': _openLcaIpcUrl},
     );
-    _guardWebMixedContent(uri);
-
-    final response = await http.get(
-      uri,
-      headers: const {'Accept': 'application/json'},
-    );
-
-    if (response.statusCode != 200) {
-      throw Exception(
-        'OpenLCA backend error ${response.statusCode}: ${response.body}',
-      );
-    }
 
     final decoded = jsonDecode(response.body);
     if (decoded is! Map<String, dynamic>) {
@@ -998,23 +1442,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
   }
 
   Future<List<Map<String, dynamic>>> _fetchOpenLcaImpactMethods() async {
-    final uri = Uri.parse(
-      '$_openLcaBackendBaseUrl/openlca/impact-methods',
-    ).replace(
+    final response = await _getFromOpenLcaBridge(
+      '/openlca/impact-methods',
       queryParameters: {'ipc_url': _openLcaIpcUrl},
     );
-    _guardWebMixedContent(uri);
-
-    final response = await http.get(
-      uri,
-      headers: const {'Accept': 'application/json'},
-    );
-
-    if (response.statusCode != 200) {
-      throw Exception(
-        'OpenLCA backend error ${response.statusCode}: ${response.body}',
-      );
-    }
 
     final decoded = jsonDecode(response.body);
     if (decoded is! Map<String, dynamic>) {
@@ -1030,6 +1461,77 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
         .whereType<Map>()
         .map((entry) => Map<String, dynamic>.from(entry))
         .toList();
+  }
+
+  Map<String, dynamic> _buildOptimizationContext(
+    List<Map<String, dynamic>> impactMethods,
+  ) {
+    final categories = <Map<String, dynamic>>[];
+    for (final method in impactMethods) {
+      final methodId = (method['id'] ?? '').toString().trim();
+      if (methodId.isEmpty) continue;
+      final methodName = _entityDisplayName(
+        method,
+        fallback: methodId,
+      );
+      final rawCategories = method['impact_categories'];
+      if (rawCategories is List && rawCategories.isNotEmpty) {
+        for (final raw in rawCategories) {
+          if (raw is! Map) continue;
+          final category = Map<String, dynamic>.from(raw);
+          final impactCategoryId = (category['id'] ?? '').toString().trim();
+          final indicator = (category['name'] ?? '').toString().trim();
+          if (indicator.isEmpty) continue;
+          categories.add({
+            'method_id': methodId,
+            'method_name': methodName,
+            if (impactCategoryId.isNotEmpty) 'impact_category_id': impactCategoryId,
+            'indicator': indicator,
+          });
+        }
+      } else {
+        categories.add({
+          'method_id': methodId,
+          'method_name': methodName,
+          'indicator': methodName,
+        });
+      }
+    }
+
+    final selectedProduct =
+        _selectedOpenLcaProductSystem ?? widget.openLcaProductSystem;
+    return {
+      if (selectedProduct != null)
+        'product_system': {
+          'id': (selectedProduct['id'] ?? '').toString(),
+          'name': _entityDisplayName(selectedProduct, fallback: ''),
+        },
+      'impact_categories': categories,
+    };
+  }
+
+  Future<Map<String, dynamic>> _loadOptimizationContextForLlm(
+    String logPrefix,
+  ) async {
+    try {
+      final impactMethods = await _fetchOpenLcaImpactMethods();
+      final context = _buildOptimizationContext(impactMethods);
+      final count = (context['impact_categories'] as List?)?.length ?? 0;
+      _debugLog('$logPrefix Optimization context loaded: impactCategories=$count');
+      return context;
+    } catch (e) {
+      _debugLog('$logPrefix Optimization context unavailable: $e');
+      final selectedProduct =
+          _selectedOpenLcaProductSystem ?? widget.openLcaProductSystem;
+      return {
+        if (selectedProduct != null)
+          'product_system': {
+            'id': (selectedProduct['id'] ?? '').toString(),
+            'name': _entityDisplayName(selectedProduct, fallback: ''),
+          },
+        'impact_categories': const <Map<String, dynamic>>[],
+      };
+    }
   }
 
   Future<Map<String, dynamic>> _runOpenLcaForAllScenarios({
@@ -1083,6 +1585,161 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     }
 
     throw Exception('OpenLCA backend response did not contain "results".');
+  }
+
+  Future<void> _openGeneratedGoalSeek(Map<String, dynamic> payload) async {
+    if (!mounted) return;
+    final productId = (payload['product_system_id'] ?? '').toString().trim();
+    final selectedProduct =
+        _selectedOpenLcaProductSystem ?? widget.openLcaProductSystem;
+    if (selectedProduct != null &&
+        productId.isNotEmpty &&
+        (selectedProduct['id'] ?? '').toString().trim() == productId) {
+      _selectedOpenLcaProductSystem = Map<String, dynamic>.from(selectedProduct);
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('LLM returned optimization JSON. Starting optimizer.'),
+      ),
+    );
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GoalSeekPage(
+          processes: widget.processes,
+          parameters: widget.parameters,
+          openLcaProductSystem:
+              _selectedOpenLcaProductSystem ?? widget.openLcaProductSystem,
+          initialImpactMethod: _selectedOpenLcaImpactMethod,
+          userPrompt: widget.prompt,
+          initialPayload: payload,
+          autoStart: true,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openGeneratedUncertaintyPropagation(
+    Map<String, dynamic> payload,
+  ) async {
+    if (!mounted) return;
+    final productId = (payload['product_system_id'] ?? '').toString().trim();
+    final selectedProduct =
+        _selectedOpenLcaProductSystem ?? widget.openLcaProductSystem;
+    if (selectedProduct != null &&
+        productId.isNotEmpty &&
+        (selectedProduct['id'] ?? '').toString().trim() == productId) {
+      _selectedOpenLcaProductSystem = Map<String, dynamic>.from(selectedProduct);
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'LLM returned uncertainty propagation JSON. Starting backend run.',
+        ),
+      ),
+    );
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => UncertaintyPropagationPage(
+          openLcaProductSystem:
+              _selectedOpenLcaProductSystem ?? widget.openLcaProductSystem,
+          userPrompt: widget.prompt,
+          initialPayload: payload,
+          autoStart: true,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openManualGoalSeek() async {
+    final loaded = await Future.wait<List<Map<String, dynamic>>>([
+      _fetchOpenLcaProductSystems(),
+      _fetchOpenLcaImpactMethods(),
+    ]);
+    if (!mounted) return;
+
+    final productSystems = loaded[0];
+    final impactMethods = loaded[1];
+    if (productSystems.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No product systems were returned by OpenLCA IPC backend.'),
+        ),
+      );
+      return;
+    }
+    if (impactMethods.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'OpenLCA IPC backend returned 0 LCIA methods. Check that the connected openLCA instance has methods loaded.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    Map<String, dynamic>? selectedProduct =
+        _selectedOpenLcaProductSystem ?? widget.openLcaProductSystem;
+    final rememberedProductId =
+        (selectedProduct?['id'] ?? '').toString().trim();
+    if (rememberedProductId.isNotEmpty) {
+      final matched = productSystems.where(
+        (item) => (item['id'] ?? '').toString().trim() == rememberedProductId,
+      );
+      if (matched.isNotEmpty) {
+        selectedProduct = matched.first;
+      }
+    }
+    selectedProduct ??= await _showOpenLcaEntityDialog(
+      title: 'Choose OpenLCA Product System',
+      items: productSystems,
+      emptyHint: 'No product systems match your search.',
+      currentSelection: _selectedOpenLcaProductSystem ?? widget.openLcaProductSystem,
+    );
+    if (!mounted || selectedProduct == null) return;
+
+    Map<String, dynamic>? selectedImpactMethod = _selectedOpenLcaImpactMethod;
+    final rememberedMethodId =
+        (selectedImpactMethod?['id'] ?? '').toString().trim();
+    if (rememberedMethodId.isNotEmpty) {
+      final matched = impactMethods.where(
+        (item) => (item['id'] ?? '').toString().trim() == rememberedMethodId,
+      );
+      if (matched.isNotEmpty) {
+        selectedImpactMethod = matched.first;
+      }
+    }
+    selectedImpactMethod ??= await _showOpenLcaEntityDialog(
+      title: 'Choose LCIA Method',
+      items: impactMethods,
+      emptyHint: 'No LCIA methods match your search.',
+      currentSelection: _selectedOpenLcaImpactMethod,
+    );
+    if (!mounted || selectedImpactMethod == null) return;
+
+    setState(() {
+      _selectedOpenLcaProductSystem = Map<String, dynamic>.from(selectedProduct!);
+      _selectedOpenLcaImpactMethod = Map<String, dynamic>.from(selectedImpactMethod!);
+    });
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GoalSeekPage(
+          processes: widget.processes,
+          parameters: widget.parameters,
+          openLcaProductSystem: _selectedOpenLcaProductSystem,
+          initialImpactMethod: _selectedOpenLcaImpactMethod,
+          userPrompt: widget.prompt,
+        ),
+      ),
+    );
   }
 
   Map<String, dynamic> _buildOpenLcaScenarioPayload() {
@@ -1197,15 +1854,13 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       productSystemName: productSystemName,
       impactMethodName: impactMethodName,
       scenarioModelByName: _scenarioModelByName,
-      generationRouteLabel:
-          _isOpenWeightMegaRun ? 'Together AI open-weight mega run' : 'GPT-5',
+      generationRouteLabel: _generationRouteLabel,
       generationByModel: _generationByModel,
+      documentProvenance: _documentProvenance,
     );
     await downloadPdf(
       bytes: pdfBytes,
-      filename: _isOpenWeightMegaRun
-          ? 'lca_results_mega_run_report.pdf'
-          : 'lca_results_report.pdf',
+      filename: _isOpenWeightMegaRun ? 'lca_results_multi_model_report.pdf' : 'lca_results_report.pdf',
     );
   }
 
@@ -1230,7 +1885,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
         );
         if (!mounted) return;
         final exportedName = _isOpenWeightMegaRun
-            ? 'lca_results_mega_run_report.pdf'
+            ? 'lca_results_multi_model_report.pdf'
             : 'lca_results_report.pdf';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1258,9 +1913,9 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           productSystemName: productSystemName,
           impactMethodName: impactMethodName,
           scenarioModelByName: _scenarioModelByName,
-          generationRouteLabel:
-              _isOpenWeightMegaRun ? 'Together AI open-weight mega run' : 'GPT-5',
+          generationRouteLabel: _generationRouteLabel,
           generationByModel: _generationByModel,
+          documentProvenance: _documentProvenance,
         ),
       ),
     );
@@ -1425,8 +2080,9 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     if (impactMethods.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content:
-              Text('No LCIA methods were returned by OpenLCA IPC backend.'),
+          content: Text(
+            'OpenLCA IPC backend returned 0 LCIA methods. Check that the connected openLCA instance has methods loaded.',
+          ),
         ),
       );
       return;
@@ -1566,15 +2222,20 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     final hasResults = _mergedScenarios != null;
     final abstention = _abstention;
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('LLM Scenario Generator')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : (!hasResults
-                ? Center(
-                    child: Column(
+    return WillPopScope(
+      onWillPop: () async {
+        Navigator.of(context).pop(_documentProvenance);
+        return false;
+      },
+      child: Scaffold(
+        appBar: AppBar(title: const Text('LLM Scenario Generator')),
+        body: Padding(
+          padding: const EdgeInsets.all(16),
+          child: _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : (!hasResults
+                  ? Center(
+                      child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
@@ -1595,15 +2256,17 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
                           alignment: WrapAlignment.center,
                           children: [
                             ElevatedButton(
-                              onPressed: _onGeneratePressed,
+                              onPressed: _onGenerateSelectedModelsPressed,
                               child:
-                                  const Text('Generate scenarios using GPT-5'),
+                                  Text('Run models: ${_selectedModelsLabel()}'),
                             ),
                             OutlinedButton(
-                              onPressed: _onGenerateOpenWeightsPressed,
-                              child: const Text(
-                                'Run open-weight models (Together AI)',
-                              ),
+                              onPressed: _selectModelsDialog,
+                              child: const Text('Select models'),
+                            ),
+                            OutlinedButton(
+                              onPressed: _openManualGoalSeek,
+                              child: const Text('Manual Optimizer'),
                             ),
                             OutlinedButton(
                               onPressed: _onSetApiKeyPressed,
@@ -1626,26 +2289,44 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
                         Card(
                           child: Padding(
                             padding: const EdgeInsets.all(12),
-                            child: Row(
+                            child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Expanded(
-                                  child: _SummaryTile(
-                                    title: 'User prompt',
-                                    child: Text(widget.prompt,
-                                        style: const TextStyle(fontSize: 14)),
-                                  ),
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(
+                                      child: _SummaryTile(
+                                        title: 'User prompt',
+                                        child: Text(widget.prompt,
+                                            style:
+                                                const TextStyle(fontSize: 14)),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    _SummaryTile(
+                                      title: 'Functions called',
+                                      child: Text(
+                                        _functionsUsed.isEmpty
+                                            ? 'none'
+                                            : _functionsUsed.join(', '),
+                                        style: const TextStyle(fontSize: 14),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(width: 12),
-                                _SummaryTile(
-                                  title: 'Functions called',
-                                  child: Text(
-                                    _functionsUsed.isEmpty
-                                        ? 'none'
-                                        : _functionsUsed.join(', '),
-                                    style: const TextStyle(fontSize: 14),
+                                if (widget.uploadedDocuments.isNotEmpty) ...[
+                                  const SizedBox(height: 12),
+                                  _SummaryTile(
+                                    title: 'Uploaded documents',
+                                    child: Text(
+                                      widget.uploadedDocuments
+                                        .map((document) => document.displayName)
+                                        .join(', '),
+                                      style: const TextStyle(fontSize: 14),
+                                    ),
                                   ),
-                                ),
+                                ],
                               ],
                             ),
                           ),
@@ -1685,14 +2366,19 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
                               label: const Text('Run LCA'),
                             ),
                             OutlinedButton.icon(
-                              onPressed: _onGeneratePressed,
+                              onPressed: _onGenerateSelectedModelsPressed,
                               icon: const Icon(Icons.refresh),
-                              label: const Text('Regenerate using GPT-5'),
+                              label: Text('Regenerate: ${_selectedModelsLabel()}'),
                             ),
                             OutlinedButton.icon(
-                              onPressed: _onGenerateOpenWeightsPressed,
-                              icon: const Icon(Icons.auto_awesome),
-                              label: const Text('Run Open-Weight Models'),
+                              onPressed: _selectModelsDialog,
+                              icon: const Icon(Icons.tune),
+                              label: const Text('Select models'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: _openManualGoalSeek,
+                              icon: const Icon(Icons.tune),
+                              label: const Text('Manual Optimizer'),
                             ),
                             OutlinedButton.icon(
                               onPressed: _onSetApiKeyPressed,
@@ -1704,7 +2390,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
                         if (_isOpenWeightMegaRun) ...[
                           const SizedBox(height: 8),
                           Text(
-                            'Current scenario set is a Together AI open-weight mega run '
+                            'Current scenario set is a multi-model run '
                             '(${_scenarioModelByName.values.toSet().length} model(s)).',
                             style: const TextStyle(
                               fontSize: 12,
@@ -1728,6 +2414,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
                       ],
                     ),
                   )),
+        ),
       ),
     );
   }

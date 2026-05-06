@@ -5,6 +5,8 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import 'document_parameterisation.dart';
+
 /// Builds a professional PDF report for LLM scenarios and LCA outputs.
 class ReportExporter {
   static const _reportTitle = 'EarlyLCA Scenario Analysis Report';
@@ -23,6 +25,8 @@ class ReportExporter {
     String? generationRouteLabel,
     Map<String, Map<String, dynamic>> generationByModel =
         const <String, Map<String, dynamic>>{},
+    List<DocumentExtractionRecord> documentProvenance =
+        const <DocumentExtractionRecord>[],
     DateTime? generatedAt,
   }) async {
     final createdAt = generatedAt ?? DateTime.now();
@@ -51,6 +55,7 @@ class ReportExporter {
         scenarioModelByName: scenarioModelByName,
         generationRouteLabel: generationRouteLabel,
         generationByModel: generationByModel,
+        documentProvenance: documentProvenance,
       ),
     );
     final doc = pw.Document(
@@ -160,6 +165,14 @@ class ReportExporter {
               ),
             ],
           ),
+          if (documentProvenance.isNotEmpty) ...[
+            pw.SizedBox(height: 14),
+            pw.Text('Document Extraction Provenance', style: h2),
+            pw.SizedBox(height: 6),
+            ...documentProvenance
+                .map((record) => _buildDocumentExtractionCard(record, h2, mono))
+                .toList(),
+          ],
           pw.SizedBox(height: 14),
           pw.Text('LLM Generation Status', style: h2),
           pw.SizedBox(height: 6),
@@ -306,6 +319,7 @@ class ReportExporter {
     required Map<String, String> scenarioModelByName,
     String? generationRouteLabel,
     required Map<String, Map<String, dynamic>> generationByModel,
+    required List<DocumentExtractionRecord> documentProvenance,
   }) sync* {
     yield prompt;
     if (generationRouteLabel != null) {
@@ -360,6 +374,173 @@ class ReportExporter {
         yield warning;
       }
     }
+    for (final record in documentProvenance) {
+      yield record.sourceLabel;
+      yield record.query;
+      for (final assumption in record.assumptions) {
+        yield assumption;
+      }
+      for (final match in record.matches) {
+        for (final value in match.values) {
+          final text = value?.toString();
+          if (text == null || text.isEmpty) continue;
+          yield text;
+        }
+      }
+    }
+  }
+
+  static pw.Widget _buildDocumentExtractionCard(
+    DocumentExtractionRecord record,
+    pw.TextStyle h2,
+    pw.TextStyle mono,
+  ) {
+    final meaningfulAssumptions =
+        _meaningfulDocumentAssumptions(record.assumptions);
+    return pw.Container(
+      margin: const pw.EdgeInsets.only(bottom: 10),
+      padding: const pw.EdgeInsets.all(10),
+      decoration: pw.BoxDecoration(
+        color: PdfColors.grey50,
+        borderRadius: pw.BorderRadius.circular(5),
+        border: pw.Border.all(color: PdfColors.grey300, width: 0.7),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(_asciiSafe(record.sourceSummary), style: h2.copyWith(fontSize: 11)),
+          pw.SizedBox(height: 4),
+          pw.Text(
+            record.query.isEmpty
+                ? 'Query: -'
+                : 'Query: ${_asciiSafe(record.query)}',
+            style: mono,
+          ),
+          pw.SizedBox(height: 4),
+          if (meaningfulAssumptions.isNotEmpty) ...[
+            pw.Text(
+              'Assumptions',
+              style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9),
+            ),
+            pw.SizedBox(height: 2),
+            ...meaningfulAssumptions.map(
+              (assumption) => pw.Bullet(
+                text: _asciiSafe(assumption),
+                style: mono,
+                bulletMargin: const pw.EdgeInsets.only(right: 4),
+              ),
+            ),
+            pw.SizedBox(height: 4),
+          ],
+          pw.Text(
+            'Top matches',
+            style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9),
+          ),
+          pw.SizedBox(height: 4),
+          if (record.matches.isEmpty)
+            pw.Text('No table match was returned.', style: mono)
+          else
+            ...record.matches.take(3).map((match) => _buildMatchCard(match, mono)),
+        ],
+      ),
+    );
+  }
+
+  static List<String> _meaningfulDocumentAssumptions(List<String> assumptions) {
+    final filtered = <String>[];
+    for (final assumption in assumptions) {
+      final cleaned = assumption.trim();
+      if (cleaned.isEmpty) continue;
+      final lower = cleaned.toLowerCase();
+      if (lower.contains('pdfplumber') ||
+          lower.contains('heuristic line/grid parsing') ||
+          lower.contains('keyword overlap') ||
+          lower.contains('requested pages were scanned') ||
+          lower.contains('highest-scoring tables are returned first')) {
+        continue;
+      }
+      filtered.add(cleaned);
+    }
+    return filtered;
+  }
+
+  static pw.Widget _buildMatchCard(
+    Map<String, dynamic> match,
+    pw.TextStyle mono,
+  ) {
+    final pageNumber = match['page_number']?.toString() ?? '-';
+    final tableIndex = match['table_index']?.toString() ?? '-';
+    final rawScore = match['score'];
+    final score = rawScore is num
+        ? rawScore.toStringAsFixed(2)
+        : rawScore?.toString() ?? '-';
+    final headers = <String>[
+      for (final header in (match['headers'] as List? ?? const []))
+        _asciiSafe(header?.toString().trim() ?? ''),
+    ].where((value) => value.isNotEmpty).take(6).toList();
+    final rows = match['rows'];
+    final previewRows = <String>[];
+    if (rows is List) {
+      for (final row in rows.take(3)) {
+        if (row is! Map) continue;
+        final rowObject = row['row_object'];
+        if (rowObject is Map) {
+          previewRows.add(
+            _asciiSafe(
+              rowObject.entries
+                .map((entry) => '${entry.key}: ${entry.value}')
+                .join(' | '),
+            ),
+          );
+        }
+      }
+    }
+
+    return pw.Container(
+      margin: const pw.EdgeInsets.only(bottom: 6),
+      padding: const pw.EdgeInsets.all(6),
+      decoration: pw.BoxDecoration(
+        color: PdfColors.white,
+        borderRadius: pw.BorderRadius.circular(4),
+        border: pw.Border.all(color: PdfColors.grey300, width: 0.5),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Row(
+            children: [
+              pw.Expanded(
+                child: pw.Text(
+                  'Page $pageNumber - Table $tableIndex - Score $score',
+                  style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9),
+                ),
+              ),
+            ],
+          ),
+          if (headers.isNotEmpty) ...[
+            pw.SizedBox(height: 4),
+            pw.Text('Headers: ${_asciiSafe(headers.join(' | '))}', style: mono),
+          ],
+          if (previewRows.isNotEmpty) ...[
+            pw.SizedBox(height: 4),
+            pw.Text(
+              _asciiSafe(previewRows.join('\n')),
+              style: mono,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  static String _asciiSafe(String value) {
+    return value
+        .replaceAll('•', '-')
+        .replaceAll('–', '-')
+        .replaceAll('—', '-')
+        .replaceAll(RegExp(r'[^\x09\x0A\x0D\x20-\x7E]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
   }
 
   static pw.TableRow _kvRow(String k, String v) {
