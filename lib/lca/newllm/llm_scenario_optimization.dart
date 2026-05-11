@@ -98,12 +98,15 @@ _ValidatedScenarioChanges _validateOptimizationPayloadImpl({
     );
   }
 
-  final mode = (optimization['mode'] ?? '').toString().trim();
-  if (mode != 'parameter_threshold' && mode != 'indicator_optimization') {
+  final rawMode = (optimization['mode'] ?? '').toString().trim();
+  if (rawMode.isNotEmpty &&
+      rawMode != 'parameter_threshold' &&
+      rawMode != 'indicator_optimization' &&
+      rawMode != 'constrained_optimization') {
     return const _ValidatedScenarioChanges(
       abstention: LlmScenarioAbstention(
         reason:
-            'Optimization mode must be "parameter_threshold" or "indicator_optimization".',
+            'Optimization mode must be "parameter_threshold", "constrained_optimization", or "indicator_optimization".',
         requiredCapability: 'Supported optimization JSON mode',
       ),
     );
@@ -324,15 +327,6 @@ _ValidatedScenarioChanges _validateOptimizationPayloadImpl({
     }
   }
 
-  if (mode == 'parameter_threshold' && constraints.isEmpty) {
-    return const _ValidatedScenarioChanges(
-      abstention: LlmScenarioAbstention(
-        reason: 'Parameter-threshold optimization requires LCIA constraints.',
-        requiredCapability: 'At least one impact constraint',
-      ),
-    );
-  }
-
   final objectiveAny = optimization['objective'];
   final objective = objectiveAny is Map
       ? objectiveAny.cast<String, dynamic>()
@@ -348,8 +342,26 @@ _ValidatedScenarioChanges _validateOptimizationPayloadImpl({
     );
   }
 
+  late final String mode;
+  if (objectiveType == 'parameter') {
+    mode = direction == 'minimize' && variables.length == 1 && constraints.length == 1
+        ? 'parameter_threshold'
+        : 'constrained_optimization';
+  } else {
+    mode = 'constrained_optimization';
+  }
+
+  if (mode == 'parameter_threshold' && constraints.isEmpty) {
+    return const _ValidatedScenarioChanges(
+      abstention: LlmScenarioAbstention(
+        reason: 'Parameter-threshold optimization requires LCIA constraints.',
+        requiredCapability: 'At least one impact constraint',
+      ),
+    );
+  }
+
   final normalizedObjective = <String, dynamic>{};
-  if (mode == 'parameter_threshold') {
+  if (objectiveType == 'parameter' || mode == 'parameter_threshold') {
     if (objectiveType.isNotEmpty && objectiveType != 'parameter') {
       return const _ValidatedScenarioChanges(
         abstention: LlmScenarioAbstention(
@@ -374,15 +386,7 @@ _ValidatedScenarioChanges _validateOptimizationPayloadImpl({
       'variable_index': variableIndex,
       'direction': direction,
     });
-  } else {
-    if (objectiveType != 'indicator') {
-      return const _ValidatedScenarioChanges(
-        abstention: LlmScenarioAbstention(
-          reason: 'Indicator optimization must use an indicator objective.',
-          requiredCapability: 'objective.type="indicator"',
-        ),
-      );
-    }
+  } else if (objectiveType == 'indicator') {
     final impactCategoryId =
         (objective['impact_category_id'] ?? '').toString().trim();
     final indicator = (objective['indicator'] ?? '').toString().trim();
@@ -452,6 +456,13 @@ _ValidatedScenarioChanges _validateOptimizationPayloadImpl({
         'direction': direction,
       });
     }
+  } else {
+    return const _ValidatedScenarioChanges(
+      abstention: LlmScenarioAbstention(
+        reason: 'Optimization objective type must be parameter or indicator.',
+        requiredCapability: 'Valid optimization objective type',
+      ),
+    );
   }
 
   final methodIds = {
@@ -464,11 +475,13 @@ _ValidatedScenarioChanges _validateOptimizationPayloadImpl({
           .firstWhere((item) => item.methodId == sharedMethodId)
           .methodName;
 
-  final n = ((controller._toInt(optimization['n']) ?? 32).clamp(1, 512) as num)
+  final n = ((controller._toInt(optimization['n']) ?? 256).clamp(1, 512) as num)
       .toInt();
   final iters =
-      ((controller._toInt(optimization['iters']) ?? 1).clamp(1, 8) as num)
+      ((controller._toInt(optimization['iters']) ?? 4).clamp(1, 8) as num)
           .toInt();
+  final samplingMethod =
+      (optimization['sampling_method'] ?? '').toString().trim();
   final payload = <String, dynamic>{
     'mode': mode,
     'product_system_id': productSystemId,
@@ -480,6 +493,7 @@ _ValidatedScenarioChanges _validateOptimizationPayloadImpl({
     'objective': normalizedObjective,
     'n': n,
     'iters': iters,
+    'sampling_method': samplingMethod.isEmpty ? 'sobol' : samplingMethod,
   };
   controller._log('[LCA] Optimization JSON validated: ${jsonEncode(payload)}');
   return _ValidatedScenarioChanges(optimizationPayload: payload);

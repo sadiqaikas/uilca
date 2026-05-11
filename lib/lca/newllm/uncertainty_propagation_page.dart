@@ -6,11 +6,13 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import 'openlca_calculation_target_selector.dart';
 import 'pdf_download.dart';
 import 'uncertainty_report_exporter.dart';
 
 class UncertaintyPropagationPage extends StatefulWidget {
   final Map<String, dynamic>? openLcaProductSystem;
+  final Map<String, dynamic>? initialCalculationTarget;
   final String? userPrompt;
   final Map<String, dynamic>? initialPayload;
   final bool autoStart;
@@ -18,6 +20,7 @@ class UncertaintyPropagationPage extends StatefulWidget {
   const UncertaintyPropagationPage({
     super.key,
     this.openLcaProductSystem,
+    this.initialCalculationTarget,
     this.userPrompt,
     this.initialPayload,
     this.autoStart = false,
@@ -45,6 +48,7 @@ class _UncertaintyPropagationPageState
   String? _jobId;
   Map<String, dynamic>? _job;
   Map<String, dynamic>? _activePayload;
+  Map<String, dynamic>? _selectedCalculationTarget;
   bool _isStarting = false;
   bool _isExportingCsv = false;
   bool _isExportingPdf = false;
@@ -52,9 +56,13 @@ class _UncertaintyPropagationPageState
   @override
   void initState() {
     super.initState();
+    if (widget.initialCalculationTarget != null) {
+      _selectedCalculationTarget = _deepCopyMap(widget.initialCalculationTarget!);
+    }
     final payload = widget.initialPayload;
     if (payload != null) {
       _activePayload = _deepCopyMap(payload);
+      _selectedCalculationTarget ??= _calculationTargetFromPayload(payload);
       _appendClientEvent(
         'llm_handoff',
         'Received uncertainty propagation payload from the LLM.',
@@ -109,7 +117,9 @@ class _UncertaintyPropagationPageState
   }
 
   Future<void> _startRunWithPayload(Map<String, dynamic> payload) async {
-    final normalizedPayload = _deepCopyMap(payload);
+    final selectedPayload = await _withSelectedCalculationTarget(payload);
+    if (selectedPayload == null) return;
+    final normalizedPayload = _deepCopyMap(selectedPayload);
     setState(() {
       _isStarting = true;
       _job = null;
@@ -252,6 +262,80 @@ class _UncertaintyPropagationPageState
   void _showSnack(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Map<String, dynamic>? _calculationTargetFromPayload(Map<String, dynamic> payload) {
+    final targetType = (payload['target_type'] ?? '').toString().trim();
+    final processId = (payload['process_id'] ?? '').toString().trim();
+    if (targetType.isEmpty && processId.isEmpty) return null;
+    return {
+      'target_type': targetType.isEmpty ? 'product_system' : targetType,
+      if (processId.isNotEmpty) 'process_id': processId,
+    };
+  }
+
+  Future<Map<String, dynamic>?> _withSelectedCalculationTarget(
+    Map<String, dynamic> payload,
+  ) async {
+    final productSystem = widget.openLcaProductSystem;
+    final productSystemId = (productSystem?['id'] ?? '').toString().trim();
+    if (productSystem == null || productSystemId.isEmpty) {
+      _showSnack(
+        'Import/select an OpenLCA product system before uncertainty propagation.',
+      );
+      return null;
+    }
+
+    final selection = await showOpenLcaCalculationTargetDialog(
+      context: context,
+      backendBaseUrl: _openLcaBackendBaseUrl,
+      ipcUrl: _openLcaIpcUrl,
+      productSystem: productSystem,
+      currentSelection:
+          _selectedCalculationTarget ?? _calculationTargetFromPayload(payload),
+    );
+    if (!mounted || selection == null) return null;
+
+    setState(() => _selectedCalculationTarget = Map<String, dynamic>.from(selection));
+    final next = _deepCopyMap(payload);
+    next['target_type'] = (selection['target_type'] ?? 'product_system')
+        .toString()
+        .trim();
+    final processId = (selection['process_id'] ?? '').toString().trim();
+    if (processId.isNotEmpty) {
+      next['process_id'] = processId;
+    } else {
+      next.remove('process_id');
+    }
+
+    final selectedFunctionalUnit =
+        selection['functional_unit'] is Map
+            ? Map<String, dynamic>.from(selection['functional_unit'] as Map)
+            : <String, dynamic>{};
+    final payloadFunctionalUnit =
+        next['functional_unit'] is Map
+            ? Map<String, dynamic>.from(next['functional_unit'] as Map)
+            : <String, dynamic>{};
+    if (!payloadFunctionalUnit.containsKey('unit') &&
+        selectedFunctionalUnit.containsKey('unit')) {
+      payloadFunctionalUnit['unit'] = selectedFunctionalUnit['unit'];
+    }
+    if (!payloadFunctionalUnit.containsKey('unit_id') &&
+        selectedFunctionalUnit.containsKey('unit_id')) {
+      payloadFunctionalUnit['unit_id'] = selectedFunctionalUnit['unit_id'];
+    }
+    if (!payloadFunctionalUnit.containsKey('flow_property') &&
+        selectedFunctionalUnit.containsKey('flow_property')) {
+      payloadFunctionalUnit['flow_property'] =
+          selectedFunctionalUnit['flow_property'];
+    }
+    if (!payloadFunctionalUnit.containsKey('flow_property_id') &&
+        selectedFunctionalUnit.containsKey('flow_property_id')) {
+      payloadFunctionalUnit['flow_property_id'] =
+          selectedFunctionalUnit['flow_property_id'];
+    }
+    next['functional_unit'] = payloadFunctionalUnit;
+    return next;
   }
 
   Map<String, dynamic>? _result() {
@@ -533,6 +617,13 @@ class _UncertaintyPropagationPageState
         ((result?['log_path'] ?? job?['log_path']) ?? '').toString().trim();
     final events = _executionEvents();
     final canExportArtifacts = status == 'completed' && result != null;
+    final selectedTarget =
+        _selectedCalculationTarget ??
+        _calculationTargetFromPayload(_activePayload ?? const {});
+    final payloadFunctionalUnit =
+        (_activePayload?['functional_unit'] is Map)
+            ? Map<String, dynamic>.from(_activePayload?['functional_unit'] as Map)
+            : null;
 
     return Scaffold(
       appBar: AppBar(
@@ -557,8 +648,21 @@ class _UncertaintyPropagationPageState
           if (_activePayload != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
-              child: Text(
-                'Product system: ${(widget.openLcaProductSystem?['name'] ?? _activePayload?['product_system'] ?? '').toString()}',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Product system: ${(widget.openLcaProductSystem?['name'] ?? _activePayload?['product_system'] ?? '').toString()}',
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Calculation target: ${openLcaCalculationTargetLabel(selectedTarget)}',
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Functional unit: ${openLcaFunctionalUnitSummary(payloadFunctionalUnit)}',
+                  ),
+                ],
               ),
             ),
           Row(

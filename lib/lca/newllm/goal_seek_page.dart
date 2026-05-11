@@ -8,12 +8,14 @@ import 'package:http/http.dart' as http;
 
 import '../newhome/lca_models.dart';
 import 'goal_seek_report_exporter.dart';
+import 'openlca_calculation_target_selector.dart';
 import 'pdf_download.dart';
 
 class GoalSeekPage extends StatefulWidget {
   final List<ProcessNode> processes;
   final ParameterSet? parameters;
   final Map<String, dynamic>? openLcaProductSystem;
+  final Map<String, dynamic>? initialCalculationTarget;
   final Map<String, dynamic>? initialImpactMethod;
   final String? userPrompt;
   final Map<String, dynamic>? initialPayload;
@@ -24,6 +26,7 @@ class GoalSeekPage extends StatefulWidget {
     required this.processes,
     required this.parameters,
     this.openLcaProductSystem,
+    this.initialCalculationTarget,
     this.initialImpactMethod,
     this.userPrompt,
     this.initialPayload,
@@ -63,6 +66,7 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
   Timer? _pollTimer;
   Map<String, dynamic>? _job;
   Map<String, dynamic>? _activePayload;
+  Map<String, dynamic>? _selectedCalculationTarget;
   List<Map<String, dynamic>> _impactMethods = const [];
   _ImpactChoice? _objective;
   String _goalMode = 'parameter';
@@ -74,10 +78,14 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
     super.initState();
     _parameterSearchCtrl.addListener(() => setState(() {}));
     _impactSearchCtrl.addListener(() => setState(() {}));
+    if (widget.initialCalculationTarget != null) {
+      _selectedCalculationTarget = _deepCopyMap(widget.initialCalculationTarget!);
+    }
     final payload = widget.initialPayload;
     if (payload != null) {
       _showSetupEditor = false;
       _activePayload = _deepCopyMap(payload);
+      _selectedCalculationTarget ??= _calculationTargetFromPayload(payload);
       _applyPayloadToSetup(payload);
       _appendClientEvent(
         'llm_handoff',
@@ -240,8 +248,12 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
 
   String get _goalModeLabel =>
       _goalMode == 'parameter'
-          ? 'Parameter threshold'
-          : 'Indicator optimisation';
+          ? (_objectiveDirection == 'minimize' &&
+                  _variables.length == 1 &&
+                  _constraints.length == 1
+              ? 'Parameter threshold'
+              : 'Constrained optimisation')
+          : 'Constrained optimisation';
 
   bool get _hasGeneratedPayload => widget.initialPayload != null;
 
@@ -262,13 +274,10 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
     final field = (rawVariable['field'] ?? '').toString().trim();
     final processIdRaw = (rawVariable['process_id'] ?? '').toString().trim();
     final processId = processIdRaw.isEmpty ? null : processIdRaw;
-    final initial =
-        (rawVariable['initial'] as num?)?.toDouble() ??
-        (rawVariable['lower'] as num?)?.toDouble() ??
-        (rawVariable['upper'] as num?)?.toDouble() ??
-        0.0;
     for (final choice in _parameterChoices()) {
       if (choice.field == field && choice.processId == processId) {
+        final initial =
+            (rawVariable['initial'] as num?)?.toDouble() ?? choice.initial;
         if ((choice.initial - initial).abs() < 1e-9) return choice;
         return _ParameterChoice(
           label: choice.label,
@@ -278,6 +287,11 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
         );
       }
     }
+    final initial =
+        (rawVariable['initial'] as num?)?.toDouble() ??
+        (rawVariable['lower'] as num?)?.toDouble() ??
+        (rawVariable['upper'] as num?)?.toDouble() ??
+        0.0;
     return _ParameterChoice(
       label: _parameterLabelFromField(field, processId, initial),
       field: field,
@@ -332,10 +346,25 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
 
   void _applyPayloadToSetup(Map<String, dynamic> payload) {
     _disposeCurrentSetupState();
-    final mode = (payload['mode'] ?? '').toString().trim();
-    _goalMode = mode == 'indicator_optimization' ? 'indicator' : 'parameter';
-
     final objective = payload['objective'];
+    final mode = (payload['mode'] ?? '').toString().trim();
+    final objectiveType = objective is Map
+        ? (objective['type'] ?? '').toString().trim()
+        : '';
+    if (mode == 'indicator_optimization') {
+      _goalMode = 'indicator';
+    } else if (mode == 'constrained_optimization' && objectiveType == 'indicator') {
+      _goalMode = 'indicator';
+    } else if (mode == 'constrained_optimization' && objectiveType == 'parameter') {
+      _goalMode = 'parameter';
+    } else if (mode == 'parameter_threshold') {
+      _goalMode = 'parameter';
+    } else if (objectiveType == 'indicator') {
+      _goalMode = 'indicator';
+    } else {
+      _goalMode = 'parameter';
+    }
+
     if (objective is Map<String, dynamic>) {
       final direction = (objective['direction'] ?? '').toString().trim();
       if (direction == 'minimize' || direction == 'maximize') {
@@ -494,15 +523,24 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
     return number.toStringAsPrecision(6);
   }
 
+  String _formatCsvNumber(dynamic value) {
+    final number = (value as num?)?.toDouble();
+    if (number == null || !number.isFinite) return value?.toString() ?? 'n/a';
+    if (number == 0) return '0';
+    final absValue = number.abs();
+    if (absValue >= 1e9 || absValue < 1e-9) {
+      return number.toStringAsExponential(10);
+    }
+    return number.toStringAsPrecision(10);
+  }
+
   String _objectiveSummary() {
     if (_goalMode == 'parameter') {
       if (_variables.isEmpty) return 'No parameter objective selected';
       final variable = _variables[_clampedParameterObjectiveIndex()];
-      final direction =
-          _objectiveDirection == 'maximize'
-              ? 'Maximum allowable'
-              : 'Minimum needed';
-      return '$direction ${variable.choice.label}';
+      return _objectiveDirection == 'maximize'
+          ? 'Maximise ${variable.choice.field}'
+          : 'Minimise ${variable.choice.field}';
     }
     if (_objective == null) return 'No indicator objective selected';
     final direction =
@@ -602,11 +640,21 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
         (widget.openLcaProductSystem?['id'] ?? '').toString().trim();
     final methodId = (_selectedImpactMethodId()).trim();
     final methodName = _selectedImpactMethodName().trim();
+    final selectedTarget = _selectedCalculationTarget;
+    final mode = _goalMode == 'parameter' &&
+            _objectiveDirection == 'minimize' &&
+            _variables.length == 1 &&
+            _constraints.length == 1
+        ? 'parameter_threshold'
+        : 'constrained_optimization';
     return {
-      'mode': _goalMode == 'parameter'
-          ? 'parameter_threshold'
-          : 'indicator_optimization',
+      'mode': mode,
       'product_system_id': productSystemId,
+      'prompt': widget.userPrompt ?? '',
+      'target_type':
+          (selectedTarget?['target_type'] ?? 'product_system').toString().trim(),
+      if ((selectedTarget?['process_id'] ?? '').toString().trim().isNotEmpty)
+        'process_id': (selectedTarget?['process_id'] ?? '').toString().trim(),
       'ipc_url': _openLcaIpcUrl,
       if (methodId.isNotEmpty) 'impact_method_id': methodId,
       if (methodName.isNotEmpty) 'impact_method_name': methodName,
@@ -635,9 +683,58 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
           },
       ],
       'objective': _buildObjectivePayload(),
-      'n': 32,
-      'iters': 1,
+      'n': 256,
+      'iters': 4,
+      'sampling_method': 'sobol',
     };
+  }
+
+  Map<String, dynamic> _normalizeGoalSeekPayload(Map<String, dynamic> payload) {
+    final next = _deepCopyMap(payload);
+    final normalizedVariables = <Map<String, dynamic>>[];
+    final variablesRaw = next['variables'];
+    if (variablesRaw is List) {
+      for (final raw in variablesRaw.whereType<Map>()) {
+        final variable = Map<String, dynamic>.from(raw);
+        final choice = _parameterChoiceFromPayload(variable);
+        variable['initial'] =
+            (variable['initial'] as num?)?.toDouble() ?? choice.initial;
+        normalizedVariables.add(variable);
+      }
+      next['variables'] = normalizedVariables;
+    }
+    final objectiveRaw = next['objective'];
+    final objective = objectiveRaw is Map
+        ? Map<String, dynamic>.from(objectiveRaw)
+        : <String, dynamic>{};
+    final objectiveType = (objective['type'] ?? '').toString().trim();
+    final direction = (objective['direction'] ?? '').toString().trim();
+    if (objectiveType == 'parameter') {
+      final variableCount = ((next['variables'] as List?) ?? const []).length;
+      final constraintCount = ((next['constraints'] as List?) ?? const []).length;
+      next['mode'] = direction == 'minimize' &&
+              variableCount == 1 &&
+              constraintCount == 1
+          ? 'parameter_threshold'
+          : 'constrained_optimization';
+    } else if (objectiveType == 'indicator') {
+      next['mode'] = 'constrained_optimization';
+    }
+    final rawN = next['n'];
+    final normalizedN = rawN is num ? rawN.toInt() : int.tryParse('$rawN');
+    next['n'] = normalizedN == null ? 256 : normalizedN.clamp(1, 512);
+    final rawIters = next['iters'];
+    final normalizedIters =
+        rawIters is num ? rawIters.toInt() : int.tryParse('$rawIters');
+    next['iters'] = normalizedIters == null ? 4 : normalizedIters.clamp(1, 8);
+    final samplingMethod = (next['sampling_method'] ?? '').toString().trim();
+    next['sampling_method'] =
+        samplingMethod.isEmpty ? 'sobol' : samplingMethod;
+    final prompt = (next['prompt'] ?? '').toString();
+    if (prompt.trim().isEmpty && (widget.userPrompt ?? '').trim().isNotEmpty) {
+      next['prompt'] = widget.userPrompt;
+    }
+    return next;
   }
 
   String _selectedImpactMethodId() {
@@ -725,7 +822,9 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
       _showSnack('Add at least one variable parameter.');
       return;
     }
-    if (_goalMode == 'parameter' && _constraints.isEmpty) {
+    if (_goalMode == 'parameter' &&
+        _objectiveDirection == 'minimize' &&
+        _constraints.isEmpty) {
       _showSnack('Add at least one LCIA constraint for parameter-threshold search.');
       return;
     }
@@ -738,7 +837,9 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
   }
 
   Future<void> _startGoalSeekWithPayload(Map<String, dynamic> payload) async {
-    final normalizedPayload = _deepCopyMap(payload);
+    final selectedPayload = await _withSelectedCalculationTarget(payload);
+    if (selectedPayload == null) return;
+    final normalizedPayload = _normalizeGoalSeekPayload(selectedPayload);
     _applyPayloadToSetup(normalizedPayload);
     setState(() {
       _isStarting = true;
@@ -842,7 +943,9 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
   }
 
   void _showPayload() {
-    final payload = _activePayload ?? _buildStartPayload();
+    final payload = _normalizeGoalSeekPayload(
+      _activePayload ?? _buildStartPayload(),
+    );
     showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -868,6 +971,50 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
   void _showSnack(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Map<String, dynamic>? _calculationTargetFromPayload(Map<String, dynamic> payload) {
+    final targetType = (payload['target_type'] ?? '').toString().trim();
+    final processId = (payload['process_id'] ?? '').toString().trim();
+    if (targetType.isEmpty && processId.isEmpty) return null;
+    return {
+      'target_type': targetType.isEmpty ? 'product_system' : targetType,
+      if (processId.isNotEmpty) 'process_id': processId,
+    };
+  }
+
+  Future<Map<String, dynamic>?> _withSelectedCalculationTarget(
+    Map<String, dynamic> payload,
+  ) async {
+    final productSystem = widget.openLcaProductSystem;
+    final productSystemId = (productSystem?['id'] ?? '').toString().trim();
+    if (productSystem == null || productSystemId.isEmpty) {
+      _showSnack('Import/select an OpenLCA product system before goal seek.');
+      return null;
+    }
+
+    final selection = await showOpenLcaCalculationTargetDialog(
+      context: context,
+      backendBaseUrl: _openLcaBackendBaseUrl,
+      ipcUrl: _openLcaIpcUrl,
+      productSystem: productSystem,
+      currentSelection:
+          _selectedCalculationTarget ?? _calculationTargetFromPayload(payload),
+    );
+    if (!mounted || selection == null) return null;
+
+    setState(() => _selectedCalculationTarget = Map<String, dynamic>.from(selection));
+    final next = _deepCopyMap(payload);
+    next['target_type'] = (selection['target_type'] ?? 'product_system')
+        .toString()
+        .trim();
+    final processId = (selection['process_id'] ?? '').toString().trim();
+    if (processId.isNotEmpty) {
+      next['process_id'] = processId;
+    } else {
+      next.remove('process_id');
+    }
+    return next;
   }
 
   List<Map<String, dynamic>> _evaluations() {
@@ -931,7 +1078,7 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
   String _constraintColumnLabel(Map<String, dynamic> constraint) {
     return '${_constraintDisplayName(constraint)} '
         '${(constraint['operator'] ?? '').toString().trim()} '
-        '${_formatNumber(constraint['target'])}';
+        '${_formatCsvNumber(constraint['target'])}';
   }
 
   String _buildCsv() {
@@ -977,19 +1124,19 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
       for (final rawParameter in ((evaluation['parameters'] as List?) ?? const []).whereType<Map>()) {
         final parameter = Map<String, dynamic>.from(rawParameter);
         final label = _parameterSummary(parameter).split(' = ').first.trim();
-        parameterValues[label] = _formatNumber(parameter['value']);
+        parameterValues[label] = _formatCsvNumber(parameter['value']);
       }
       for (final rawConstraint in ((evaluation['constraints'] as List?) ?? const []).whereType<Map>()) {
         final constraint = Map<String, dynamic>.from(rawConstraint);
         final label = _constraintColumnLabel(constraint);
-        constraintValues[label] = _formatNumber(constraint['value']);
+        constraintValues[label] = _formatCsvNumber(constraint['value']);
         constraintStatuses[label] = constraint['satisfied'] == true ? 'pass' : 'miss';
       }
 
       final row = <String>[
         '#${evaluation['index'] ?? ''}',
         (evaluation['objective_label'] ?? '').toString(),
-        _formatNumber(evaluation['display_objective_value']),
+        _formatCsvNumber(evaluation['display_objective_value']),
         evaluation['feasible'] == true ? 'pass' : 'miss',
         for (final label in parameterLabels) parameterValues[label] ?? '',
         for (final label in constraintLabels) constraintValues[label] ?? '',
@@ -999,6 +1146,20 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
     }
 
     return '${lines.join('\n')}\n';
+  }
+
+  String _exactUserPromptForExport() {
+    final candidates = <dynamic>[
+      _activePayload?['prompt'],
+      widget.initialPayload?['prompt'],
+      widget.userPrompt,
+      _job?['request'] is Map ? (_job?['request'] as Map)['prompt'] : null,
+    ];
+    for (final candidate in candidates) {
+      final text = candidate?.toString() ?? '';
+      if (text.trim().isNotEmpty) return text;
+    }
+    return '';
   }
 
   Future<Uint8List> _buildPdf() async {
@@ -1037,10 +1198,10 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
       goalModeLabel: _goalModeLabel,
       objectiveSummary: _objectiveSummary(),
       selectedImpactMethodSummary: _selectedImpactMethodSummary(),
-      userPrompt: (widget.userPrompt ?? '').trim(),
+      userPrompt: _exactUserPromptForExport(),
       parameterLabelBuilder: _parameterLabel,
       constraintLabelBuilder: _constraintColumnLabel,
-      formatNumber: _formatNumber,
+      formatNumber: _formatCsvNumber,
       generatedAt: DateTime.now(),
     );
   }
@@ -1120,6 +1281,9 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
         (widget.openLcaProductSystem?['name'] ?? '').toString().trim();
     final methodName = _selectedImpactMethodSummary();
     final payload = _activePayload ?? widget.initialPayload;
+    final selectedTarget =
+        _selectedCalculationTarget ??
+        _calculationTargetFromPayload(payload ?? const <String, dynamic>{});
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -1147,6 +1311,9 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
             ),
             const SizedBox(height: 8),
             Text('Product system: ${productName.isEmpty ? 'Not set' : productName}'),
+            Text(
+              'Calculation target: ${openLcaCalculationTargetLabel(selectedTarget).isEmpty ? 'Not set' : openLcaCalculationTargetLabel(selectedTarget)}',
+            ),
             Text('Mode: $_goalModeLabel'),
             Text(
               'LCIA method: ${methodName.isEmpty ? 'Not resolved' : methodName}',
@@ -1319,19 +1486,12 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
             ],
             if (_goalMode == 'parameter' && _variables.isNotEmpty) ...[
               const SizedBox(height: 8),
-              DropdownButtonFormField<String>(
-                value: _objectiveDirection,
-                decoration: const InputDecoration(
+              const InputDecorator(
+                decoration: InputDecoration(
                   border: OutlineInputBorder(),
-                  labelText: 'Parameter direction',
+                  labelText: 'Parameter threshold mode',
                 ),
-                items: const [
-                  DropdownMenuItem(value: 'minimize', child: Text('Minimum needed')),
-                  DropdownMenuItem(value: 'maximize', child: Text('Maximum allowable')),
-                ],
-                onChanged: (value) {
-                  if (value != null) setState(() => _objectiveDirection = value);
-                },
+                child: Text('Minimum needed'),
               ),
             ],
           ],

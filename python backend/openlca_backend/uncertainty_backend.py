@@ -45,6 +45,8 @@ class OpenLcaUncertaintyStartRequest(BaseModel):
     model_id: str | None = None
     product_system: str | None = None
     product_system_id: str | None = None
+    target_type: str = Field(default="product_system", pattern=r"^(product_system|process)$")
+    process_id: str | None = None
     functional_unit: dict[str, Any] = Field(default_factory=dict)
     impact_method: str | None = None
     impact_method_id: str | None = None
@@ -268,7 +270,24 @@ def _validate_uncertainty_request(
             detail="No parameter catalog could be built for the selected product system.",
         )
 
-    normalized_fu = _normalize_functional_unit(request.functional_unit)
+    try:
+        calculation_target = deps["resolve_calculation_target"](
+            client=client,
+            product_system_ref=product_system_ref,
+            product_system_entity=product_system_entity,
+            target_type=request.target_type,
+            process_id=request.process_id,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        normalized_fu = deps["normalize_functional_unit_for_target"](
+            request.functional_unit,
+            calculation_target,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     sampling = _normalize_sampling(request.sampling)
     outputs = _normalize_outputs(request.outputs)
 
@@ -306,6 +325,9 @@ def _validate_uncertainty_request(
         or (product_system_ref.name or product_system_id),
         "product_system": product_system_ref.name or product_system_id,
         "product_system_id": product_system_id,
+        "target_type": request.target_type,
+        "process_id": (request.process_id or "").strip() or None,
+        "calculation_target": deps["public_calculation_target"](calculation_target),
         "functional_unit": normalized_fu,
         "impact_method": impact_method_ref.name or impact_method_ref.id,
         "impact_method_id": impact_method_ref.id,
@@ -885,6 +907,13 @@ def _run_uncertainty_job(
                 f'Product system "{request["product_system_id"]}" could not be loaded.'
             )
 
+        calculation_target = deps["resolve_calculation_target"](
+            client=client,
+            product_system_ref=product_system_ref,
+            product_system_entity=product_system_entity,
+            target_type=request.get("target_type"),
+            process_id=request.get("process_id"),
+        )
         parameter_catalog = deps["build_parameter_catalog"](client, product_system_entity)
         impact_method_ref = deps["pick_impact_method"](
             client,
@@ -904,6 +933,9 @@ def _run_uncertainty_job(
             "Resolved product system, impact method, and parameter catalog.",
             details={
                 "product_system_id": request["product_system_id"],
+                "target_type": request.get("target_type"),
+                "process_id": request.get("process_id"),
+                "calculation_target": deps["public_calculation_target"](calculation_target),
                 "impact_method_id": request["impact_method_id"],
                 "parameter_count": len(request["parameters"]),
                 "impact_category_count": len(request["impact_categories"]),
@@ -976,6 +1008,7 @@ def _run_uncertainty_job(
                     product_system_ref=product_system_ref,
                     impact_method_ref=impact_method_ref,
                     parameter_catalog=parameter_catalog,
+                    calculation_target=calculation_target,
                 )
                 lcia_results = _extract_selected_lcia_results(
                     result,

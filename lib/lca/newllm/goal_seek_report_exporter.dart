@@ -81,29 +81,21 @@ class GoalSeekReportExporter {
     final createdAt = generatedAt ?? DateTime.now();
     final status = _asString(job['status'], fallback: 'unknown');
     final evaluations = _listOfMaps(job['evaluations']);
-    final events = _listOfMaps(job['events']);
+    final request = _mapOrNull(job['request']);
     final baseline = _mapOrNull(job['baseline']);
+    final solverInitial = _mapOrNull(job['solver_initial']);
     final best = _mapOrNull(job['best']);
+    final optimizer = _mapOrNull(job['optimizer']);
     final error = _asString(job['error']);
+    final recordedPrompt = request?['prompt']?.toString() ?? '';
+    final promptText =
+        userPrompt.trim().isNotEmpty ? userPrompt : recordedPrompt;
     final feasibleCount =
         evaluations.where((evaluation) => evaluation['feasible'] == true).length;
     final warningCount = evaluations.fold<int>(
       0,
       (sum, evaluation) =>
           sum + _listOfDynamic(evaluation['warnings']).whereType<String>().length,
-    );
-    final parameterColumns = _collectParameterColumns(
-      evaluations,
-      parameterLabelBuilder,
-    );
-    final constraintColumns = _collectConstraintColumns(
-      evaluations,
-      constraintLabelBuilder,
-    );
-    final preparedEvaluations = _prepareEvaluations(
-      evaluations: evaluations,
-      best: best,
-      formatNumber: formatNumber,
     );
 
     doc.addPage(
@@ -121,6 +113,7 @@ class GoalSeekReportExporter {
         toolName: toolName,
         best: best,
         baseline: baseline,
+        solverInitial: solverInitial,
         formatNumber: formatNumber,
       ),
     );
@@ -142,78 +135,75 @@ class GoalSeekReportExporter {
             feasibleCount: feasibleCount,
             formatNumber: formatNumber,
             baseline: baseline,
+            solverInitial: solverInitial,
             best: best,
             generatedAt: createdAt,
             job: job,
-          ),
-          _panel(
-            title: 'Scope',
-            child: pw.Text(
-              'This report includes the run summary, the best reported result, and the complete evaluation appendix.',
-              style: _bodyStyle(),
-            ),
+            optimizer: optimizer,
           ),
         ],
       ),
     );
 
-    _addLongTextPages(
-      doc,
-      title: 'User Prompt',
-      description:
-          'Prompt used for the optimisation request.',
-      body: userPrompt,
+    doc.addPage(
+      _buildPortraitPage(
+        title: 'Optimisation Definition',
+        description:
+            'Core optimisation setup used for this run: objective, variables, and constraints.',
+        children: [
+          _panel(
+            title: 'Objective',
+            child: _kvTable([
+              ['Mode', goalModeLabel],
+              ['Objective', objectiveSummary],
+              [
+                'LCIA method(s)',
+                selectedImpactMethodSummary.trim().isEmpty
+                    ? 'Not resolved'
+                    : selectedImpactMethodSummary.trim(),
+              ],
+            ]),
+          ),
+          _buildConfigurationCard(
+            variables: variables,
+            constraints: constraints,
+          ),
+        ],
+      ),
     );
+
+    _addPromptPages(doc, promptText: promptText);
 
     if (error.isNotEmpty) {
-      _addLongTextPages(
-        doc,
-        title: 'Failure Diagnostic',
+      doc.addPage(
+        _buildPortraitPage(
+          title: 'Failure Diagnostic',
+          description:
+              'Reported failure details from the optimisation run.',
+          children: [
+            _buildAlertCard('Failure Diagnostic', error),
+          ],
+        ),
+      );
+    }
+
+    doc.addPage(
+      _buildPortraitPage(
+        title: 'Result Summary',
         description:
-            'Reported failure details from the optimisation run.',
-        body: error,
-        alert: true,
-      );
-    }
-
-    _addConfigurationPages(
-      doc,
-      variables: variables,
-      constraints: constraints,
+            'Summary of the reference case and the best feasible solution found.',
+        children: [
+          _buildResultSummaryCard(
+            best: best,
+            baseline: baseline,
+            solverInitial: solverInitial,
+            formatNumber: formatNumber,
+            parameterLabelBuilder: parameterLabelBuilder,
+            constraintLabelBuilder: constraintLabelBuilder,
+          ),
+        ],
+      ),
     );
-
-    _addResultSummaryPages(
-      doc,
-      best: best,
-      baseline: baseline,
-      formatNumber: formatNumber,
-      parameterLabelBuilder: parameterLabelBuilder,
-      constraintLabelBuilder: constraintLabelBuilder,
-    );
-
-    if (preparedEvaluations.isNotEmpty) {
-      _addEvaluationOverviewPages(
-        doc,
-        preparedEvaluations,
-        objectiveSummary: objectiveSummary,
-      );
-      _addParameterMatrixPages(
-        doc,
-        preparedEvaluations,
-        parameterColumns,
-        objectiveSummary: objectiveSummary,
-      );
-      _addConstraintMatrixPages(
-        doc,
-        preparedEvaluations,
-        constraintColumns,
-        objectiveSummary: objectiveSummary,
-      );
-    }
-
-    if (events.isNotEmpty) {
-      _addEventTimelinePages(doc, events);
-    }
 
     return doc.save();
   }
@@ -235,6 +225,46 @@ class GoalSeekReportExporter {
           description: description,
           children: [
             alert ? _buildAlertCard(title, chunks[i]) : _buildTextCard(title, chunks[i]),
+          ],
+        ),
+      );
+    }
+  }
+
+  static void _addPromptPages(
+    pw.Document doc, {
+    required String promptText,
+  }) {
+    final chunks = _chunkPromptText(promptText, _portraitTextChars);
+    if (chunks.isEmpty) {
+      doc.addPage(
+        _buildPortraitPage(
+          title: 'User Prompt',
+          description: 'Exact prompt submitted for this optimisation run.',
+          children: [
+            _buildTextCard(
+              'User prompt',
+              'Prompt not recorded in the submitted optimization request.',
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    for (var i = 0; i < chunks.length; i += 1) {
+      doc.addPage(
+        _buildPortraitPage(
+          title: chunks.length == 1
+              ? 'User Prompt'
+              : 'User Prompt ${i + 1}/${chunks.length}',
+          description: 'Exact prompt submitted for this optimisation run.',
+          children: [
+            _buildTextCard(
+              'User prompt',
+              chunks[i],
+              preserveWhitespace: true,
+            ),
           ],
         ),
       );
@@ -484,16 +514,28 @@ class GoalSeekReportExporter {
     required String toolName,
     required Map<String, dynamic>? best,
     required Map<String, dynamic>? baseline,
+    required Map<String, dynamic>? solverInitial,
     required GoalSeekNumberFormatter formatNumber,
   }) {
     final heroSubtitle = productSystemName.trim().isEmpty
         ? 'Optimisation route'
         : productSystemName.trim();
     final bestObjective =
-        best == null ? 'No feasible point' : formatNumber(best['display_objective_value']);
-    final baselineObjective = baseline == null
+        best == null
+            ? 'No feasible solution found'
+            : formatNumber(best['display_objective_value']);
+    final referenceTitle = baseline != null
+        ? 'Baseline objective'
+        : solverInitial != null
+        ? 'Solver initial objective'
+        : 'Reference objective';
+    final referenceEvaluation = baseline ?? solverInitial;
+    final referenceObjective = referenceEvaluation == null
         ? 'Not recorded'
-        : formatNumber(baseline['display_objective_value']);
+        : formatNumber(referenceEvaluation['display_objective_value']);
+    final resultHeadline = best == null
+        ? 'No feasible solution was found.'
+        : 'Best feasible solution found.';
 
     return pw.Page(
       pageFormat: PdfPageFormat.a4,
@@ -548,11 +590,19 @@ class GoalSeekReportExporter {
                 ),
                 pw.SizedBox(height: 18),
                 pw.Text(
-                  objectiveSummary,
+                  resultHeadline,
                   style: pw.TextStyle(
                     fontSize: 12,
                     fontWeight: pw.FontWeight.bold,
                     color: _brandDark,
+                  ),
+                ),
+                pw.SizedBox(height: 6),
+                pw.Text(
+                  objectiveSummary,
+                  style: pw.TextStyle(
+                    fontSize: 10,
+                    color: _ink,
                   ),
                 ),
                 pw.SizedBox(height: 6),
@@ -581,7 +631,7 @@ class GoalSeekReportExporter {
               ['Recorded runs', '$evaluationCount'],
               ['Feasible runs', '$feasibleCount'],
               ['Warnings', '$warningCount'],
-              ['Baseline objective', baselineObjective],
+              [referenceTitle, referenceObjective],
               ['Best feasible objective', bestObjective],
             ]),
           ),
@@ -635,15 +685,27 @@ class GoalSeekReportExporter {
     required int feasibleCount,
     required GoalSeekNumberFormatter formatNumber,
     required Map<String, dynamic>? baseline,
+    required Map<String, dynamic>? solverInitial,
     required Map<String, dynamic>? best,
     required DateTime generatedAt,
     required Map<String, dynamic> job,
+    required Map<String, dynamic>? optimizer,
   }) {
     final objectiveLabel = _asString(
-      baseline?['objective_label'] ?? best?['objective_label'],
+      baseline?['objective_label'] ??
+          solverInitial?['objective_label'] ??
+          best?['objective_label'],
     );
     final startedAt = _toDateTime(job['started_at']);
     final completedAt = _toDateTime(job['completed_at']);
+    final referenceTitle = baseline != null
+        ? 'Baseline objective'
+        : solverInitial != null
+        ? 'Solver initial objective'
+        : 'Reference objective';
+    final referenceEvaluation = baseline ?? solverInitial;
+    final solverSettings =
+        optimizer == null ? null : _mapOrNull(optimizer['solver_settings']);
     return _panel(
       title: 'Run Details',
       child: _kvTable([
@@ -670,9 +732,18 @@ class GoalSeekReportExporter {
         ['Runtime', _formatDuration(startedAt, completedAt)],
         ['Recorded evaluations', '${evaluations.length}'],
         ['Feasible evaluations', '$feasibleCount'],
+        if (optimizer != null)
+          ['Stop reason', _humanizeStopReason(_asString(optimizer['stop_reason']))],
+        if (optimizer != null)
+          ['Solver method', _asString(optimizer['method'], fallback: 'Not recorded')],
+        if (solverSettings != null)
+          [
+            'Solver settings',
+            _solverSettingsSummary(solverSettings),
+          ],
         if (objectiveLabel.isNotEmpty) ['Objective label', objectiveLabel],
-        if (baseline != null)
-          ['Baseline objective', formatNumber(baseline['display_objective_value'])],
+        if (referenceEvaluation != null)
+          [referenceTitle, formatNumber(referenceEvaluation['display_objective_value'])],
         if (best != null)
           ['Best feasible objective', formatNumber(best['display_objective_value'])],
       ]),
@@ -731,10 +802,17 @@ class GoalSeekReportExporter {
   static pw.Widget _buildResultSummaryCard({
     required Map<String, dynamic>? best,
     required Map<String, dynamic>? baseline,
+    required Map<String, dynamic>? solverInitial,
     required GoalSeekNumberFormatter formatNumber,
     required GoalSeekParameterLabelBuilder parameterLabelBuilder,
     required GoalSeekConstraintLabelBuilder constraintLabelBuilder,
   }) {
+    final referenceTitle = baseline != null
+        ? 'Baseline'
+        : solverInitial != null
+        ? 'Solver initial point'
+        : 'Reference';
+    final referenceEvaluation = baseline ?? solverInitial;
     return _panel(
       title: 'Result Summary',
       child: pw.Column(
@@ -745,10 +823,10 @@ class GoalSeekReportExporter {
             children: [
               pw.Expanded(
                 child: _summaryValueCard(
-                  title: 'Baseline',
-                  value: baseline == null
+                  title: referenceTitle,
+                  value: referenceEvaluation == null
                       ? 'Not recorded'
-                      : formatNumber(baseline['display_objective_value']),
+                      : formatNumber(referenceEvaluation['display_objective_value']),
                   accent: _accent,
                 ),
               ),
@@ -775,7 +853,7 @@ class GoalSeekReportExporter {
                 border: pw.Border.all(color: _line),
               ),
               child: pw.Text(
-                'The optimiser did not produce a feasible point. The appendix still includes every recorded evaluation for diagnosis.',
+                'The optimiser did not produce a feasible solution that satisfied all recorded constraints.',
                 style: _bodyStyle(),
               ),
             )
@@ -783,6 +861,20 @@ class GoalSeekReportExporter {
             pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
+                pw.Container(
+                  width: double.infinity,
+                  padding: const pw.EdgeInsets.all(12),
+                  decoration: pw.BoxDecoration(
+                    color: _successSoft,
+                    borderRadius: pw.BorderRadius.circular(10),
+                    border: pw.Border.all(color: _line),
+                  ),
+                  child: pw.Text(
+                    'Reported result is the best feasible solution found from the recorded evaluations. This wording does not claim a proven global optimum.',
+                    style: _bodyStyle(color: _success),
+                  ),
+                ),
+                pw.SizedBox(height: 10),
                 pw.Text(
                   'Best feasible parameter values',
                   style: pw.TextStyle(
@@ -847,11 +939,15 @@ class GoalSeekReportExporter {
     );
   }
 
-  static pw.Widget _buildTextCard(String title, String body) {
+  static pw.Widget _buildTextCard(
+    String title,
+    String body, {
+    bool preserveWhitespace = false,
+  }) {
     return _panel(
       title: title,
       child: pw.Text(
-        _cleanText(body),
+        preserveWhitespace ? _cleanPromptText(body) : _cleanText(body),
         style: _bodyStyle(),
       ),
     );
@@ -882,6 +978,28 @@ class GoalSeekReportExporter {
         ],
       ),
     );
+  }
+
+  static String _solverSettingsSummary(Map<String, dynamic> settings) {
+    final parts = <String>[];
+    final n = settings['n'];
+    final iters = settings['iters'];
+    final samplingMethod = _asString(settings['sampling_method']);
+    final localMinimizer = _asString(settings['local_minimizer']);
+    if (n != null) parts.add('n=$n');
+    if (iters != null) parts.add('iters=$iters');
+    if (samplingMethod.isNotEmpty) parts.add('sampling=$samplingMethod');
+    if (localMinimizer.isNotEmpty) parts.add('local=$localMinimizer');
+    return parts.isEmpty ? 'Not recorded' : parts.join(', ');
+  }
+
+  static String _humanizeStopReason(String stopReason) {
+    if (stopReason.trim().isEmpty) return 'Not recorded';
+    return stopReason
+        .split('_')
+        .where((part) => part.trim().isNotEmpty)
+        .map((part) => part[0].toUpperCase() + part.substring(1))
+        .join(' ');
   }
 
   static void _addEvaluationOverviewPages(
@@ -1549,6 +1667,42 @@ class GoalSeekReportExporter {
     return chunks;
   }
 
+  static List<String> _chunkPromptText(String text, int maxChars) {
+    final normalized = _cleanPromptText(text);
+    if (normalized.trim().isEmpty) return const [];
+
+    final chunks = <String>[];
+    var current = StringBuffer();
+
+    void flush() {
+      final out = current.toString();
+      if (out.isNotEmpty) chunks.add(out);
+      current = StringBuffer();
+    }
+
+    final lines = normalized.split('\n');
+    for (var i = 0; i < lines.length; i += 1) {
+      final segment = i == lines.length - 1 ? lines[i] : '${lines[i]}\n';
+      if (segment.length > maxChars) {
+        if (current.isNotEmpty) flush();
+        for (var start = 0; start < segment.length; start += maxChars) {
+          final end = start + maxChars > segment.length
+              ? segment.length
+              : start + maxChars;
+          chunks.add(segment.substring(start, end));
+        }
+        continue;
+      }
+      if (current.isNotEmpty && current.length + segment.length > maxChars) {
+        flush();
+      }
+      current.write(segment);
+    }
+
+    if (current.isNotEmpty) flush();
+    return chunks;
+  }
+
   static List<pw.Widget> _withSpacing(List<pw.Widget> children, {double gap = 8}) {
     final out = <pw.Widget>[];
     for (var i = 0; i < children.length; i += 1) {
@@ -1567,6 +1721,10 @@ class GoalSeekReportExporter {
         .replaceAll(RegExp(r'[ \t]+'), ' ')
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
+  }
+
+  static String _cleanPromptText(String value) {
+    return value.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
   }
 
   static DateTime? _toDateTime(dynamic secondsValue) {

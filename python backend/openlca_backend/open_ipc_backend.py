@@ -47,6 +47,29 @@ app.add_middleware(
 DEFAULT_OPENLCA_IPC_URL = os.getenv("OPENLCA_IPC_URL", "http://localhost:8080")
 DEFAULT_IMPACT_METHOD_ID = os.getenv("OPENLCA_IMPACT_METHOD_ID")
 DEFAULT_IMPACT_METHOD_NAME = os.getenv("OPENLCA_IMPACT_METHOD_NAME")
+_UNSUPPORTED_STRUCTURAL_KEYS = {
+    "flows",
+    "processes",
+    "providers",
+    "provider",
+    "datasets",
+    "dataset",
+    "database",
+    "allocation",
+    "system_boundary",
+    "systemBoundary",
+    "create_flow",
+    "create_process",
+    "change_provider",
+    "remap_database",
+}
+_SUPPORTED_SCENARIO_MODEL_KEYS = {
+    "changes",
+    "number_functional_units",
+    "parameters",
+    "global_parameters",
+    "process_parameters",
+}
 
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -58,6 +81,8 @@ _FORMULA_FUNCTION_NAMES = {"min", "max", "abs", "round", "ceil", "floor"}
 
 class OpenLcaRunScenariosRequest(BaseModel):
     product_system_id: str = Field(..., min_length=1)
+    target_type: str = Field(default="product_system", pattern=r"^(product_system|process)$")
+    process_id: str | None = None
     scenarios: dict[str, Any]
     ipc_url: str | None = None
     impact_method_id: str | None = None
@@ -263,6 +288,97 @@ def get_product_system_project_bundle(
     }
 
 
+@app.get("/openlca/product-systems/{product_system_id}/calculation-targets")
+def get_product_system_calculation_targets(
+    product_system_id: str,
+    ipc_url: str = Query(
+        default=DEFAULT_OPENLCA_IPC_URL,
+        description="JSON-RPC endpoint for openLCA IPC (e.g. http://localhost:8080)",
+    ),
+) -> dict[str, Any]:
+    """Return safe calculation-target choices for a product system."""
+    _ensure_openlca_available()
+    client = _new_ipc_client(ipc_url)
+
+    try:
+        product_system_ref = client.get_descriptor(o.ProductSystem, uid=product_system_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to query product system descriptor at {ipc_url}: {exc}",
+        ) from exc
+
+    if product_system_ref is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Product system '{product_system_id}' not found.",
+        )
+    if product_system_ref.ref_type is None:
+        product_system_ref.ref_type = o.RefType.ProductSystem
+
+    try:
+        product_system_entity = client.get(o.ProductSystem, uid=product_system_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to load product system '{product_system_id}' at {ipc_url}: {exc}",
+        ) from exc
+
+    if product_system_entity is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Product system '{product_system_id}' could not be loaded.",
+        )
+
+    try:
+        product_target = _resolve_calculation_target(
+            client=client,
+            product_system_ref=product_system_ref,
+            product_system_entity=product_system_entity,
+            target_type="product_system",
+            process_id=None,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    direct_targets: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for process_ref in _collect_product_system_process_refs(product_system_entity):
+        process_id = process_ref["id"]
+        try:
+            target = _resolve_calculation_target(
+                client=client,
+                product_system_ref=product_system_ref,
+                product_system_entity=product_system_entity,
+                target_type="process",
+                process_id=process_id,
+            )
+        except RuntimeError as exc:
+            warnings.append(str(exc))
+            continue
+        direct_targets.append(_public_calculation_target(target))
+
+    direct_targets.sort(
+        key=lambda item: (
+            str(item.get("process_name") or item.get("label") or "").lower(),
+            str(item.get("process_id") or "").lower(),
+        )
+    )
+
+    return {
+        "success": True,
+        "ipc_url": ipc_url,
+        "product_system": _ref_to_public_dict(product_system_ref),
+        "product_system_target": _public_calculation_target(product_target),
+        "direct_process_targets": direct_targets,
+        "warnings": warnings,
+        "stats": {
+            "direct_process_target_count": len(direct_targets),
+            "warning_count": len(warnings),
+        },
+    }
+
+
 @app.get("/openlca/impact-methods")
 def list_impact_methods(
     ipc_url: str = Query(
@@ -353,6 +469,17 @@ def run_scenarios(request: OpenLcaRunScenariosRequest) -> dict[str, Any]:
             detail=f"Product system '{request.product_system_id}' not found.",
         )
 
+    try:
+        calculation_target = _resolve_calculation_target(
+            client=client,
+            product_system_ref=product_system_ref,
+            product_system_entity=product_system_entity,
+            target_type=request.target_type,
+            process_id=request.process_id,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     parameter_catalog = _build_parameter_catalog(client, product_system_entity)
 
     impact_method_ref = _pick_impact_method(
@@ -391,6 +518,7 @@ def run_scenarios(request: OpenLcaRunScenariosRequest) -> dict[str, Any]:
                 product_system_ref=product_system_ref,
                 impact_method_ref=impact_method_ref,
                 parameter_catalog=parameter_catalog,
+                calculation_target=calculation_target,
             )
             results[scenario_name] = {"success": True, "result": result_payload}
             any_success = True
@@ -402,6 +530,7 @@ def run_scenarios(request: OpenLcaRunScenariosRequest) -> dict[str, Any]:
         "runner": "openlca_ipc",
         "ipc_url": ipc_url,
         "product_system": _ref_to_public_dict(product_system_ref),
+        "calculation_target": _public_calculation_target(calculation_target),
         "impact_method": _ref_to_public_dict(impact_method_ref),
         "results": results,
     }
@@ -443,6 +572,61 @@ def _extract_model_from_scenario_payload(payload: Any) -> dict[str, Any]:
     return payload
 
 
+def _find_unsupported_structural_content(
+    payload: Any,
+    *,
+    path: str = "$",
+) -> str | None:
+    unsupported_keys = {item.lower() for item in _UNSUPPORTED_STRUCTURAL_KEYS}
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            normalized_key = str(key).strip().lower()
+            if normalized_key in unsupported_keys:
+                return f"{path}.{key}"
+            child = _find_unsupported_structural_content(
+                value,
+                path=f"{path}.{key}",
+            )
+            if child is not None:
+                return child
+        return None
+    if isinstance(payload, list):
+        for index, item in enumerate(payload):
+            child = _find_unsupported_structural_content(
+                item,
+                path=f"{path}[{index}]",
+            )
+            if child is not None:
+                return child
+    return None
+
+
+def _scenario_parameter_error_message(warnings: list[str]) -> str:
+    joined = "; ".join(warnings[:6])
+    suffix = "" if len(warnings) <= 6 else f" ... ({len(warnings)} warnings total)"
+    return (
+        "Scenario payload could not be translated into exact openLCA parameter overrides: "
+        f"{joined}{suffix}"
+    )
+
+
+def _validate_supported_scenario_model(model: dict[str, Any]) -> None:
+    unsupported_path = _find_unsupported_structural_content(model)
+    if unsupported_path is not None:
+        raise RuntimeError(
+            "Structural model edits are unsupported in the openLCA IPC runner: "
+            f"{unsupported_path}"
+        )
+
+    for key in model:
+        normalized_key = str(key).strip()
+        if normalized_key not in _SUPPORTED_SCENARIO_MODEL_KEYS:
+            raise RuntimeError(
+                "Scenario payload contains unsupported top-level content for the openLCA IPC runner: "
+                f"$.{key}"
+            )
+
+
 def _safe_get(client, model_type, uid: str):
     try:
         return client.get(model_type, uid=uid)
@@ -458,6 +642,388 @@ def _safe_get_parameters(client, model_type, uid: str) -> list[Any]:
     if isinstance(params, (list, tuple)):
         return list(params)
     return []
+
+
+def _normalize_target_type(raw: Any) -> str:
+    text = str(raw or "product_system").strip().lower().replace("-", "_")
+    if text not in {"product_system", "process"}:
+        raise ValueError(
+            f"Unsupported calculation target type '{raw}'. Expected 'product_system' or 'process'."
+        )
+    return text
+
+
+def _enum_ref_type(name: str) -> Any | None:
+    if o is None:
+        return None
+    return getattr(o.RefType, name, None)
+
+
+def _clone_ref(raw_ref: Any, *, ref_type: Any | None = None) -> Any | None:
+    ref_id = _extract_ref_id(raw_ref)
+    if not ref_id:
+        return None
+    ref = o.Ref(id=ref_id)
+    name = _extract_ref_name(raw_ref)
+    if name:
+        ref.name = name
+    category = _clean_text(getattr(raw_ref, "category", None))
+    if category:
+        ref.category = category
+    location = _clean_text(getattr(raw_ref, "location", None))
+    if location:
+        ref.location = location
+    library = _clean_text(getattr(raw_ref, "library", None))
+    if library:
+        ref.library = library
+    ref_unit = _extract_unit_name(getattr(raw_ref, "ref_unit", None))
+    if ref_unit:
+        ref.ref_unit = ref_unit
+    resolved_ref_type = ref_type or getattr(raw_ref, "ref_type", None)
+    if resolved_ref_type is not None:
+        ref.ref_type = resolved_ref_type
+    return ref
+
+
+def _public_ref_summary(raw_ref: Any) -> dict[str, Any] | None:
+    ref_id = _extract_ref_id(raw_ref)
+    if not ref_id:
+        return None
+    payload = {"id": ref_id}
+    name = _extract_ref_name(raw_ref)
+    if name:
+        payload["name"] = name
+    return payload
+
+
+def _positive_float_or_none(value: Any) -> float | None:
+    numeric = _coerce_float(value)
+    if numeric is None or numeric <= 0:
+        return None
+    return numeric
+
+
+def _process_ref_map(product_system: Any) -> dict[str, dict[str, str]]:
+    return {
+        item["id"]: item
+        for item in _collect_product_system_process_refs(product_system)
+        if item.get("id")
+    }
+
+
+def _resolve_process_reference_exchange(process_entity: Any) -> Any:
+    process_name = _clean_text(getattr(process_entity, "name", None)) or "process"
+    exchanges = list(getattr(process_entity, "exchanges", None) or [])
+    quantitative = [
+        exchange
+        for exchange in exchanges
+        if _exchange_is_quantitative_reference(exchange)
+    ]
+    quantitative_outputs = [
+        exchange for exchange in quantitative if not _exchange_is_input(exchange)
+    ]
+    if len(quantitative_outputs) == 1:
+        return quantitative_outputs[0]
+    if len(quantitative_outputs) > 1:
+        raise RuntimeError(
+            f"Process '{process_name}' exposes multiple quantitative reference outputs."
+        )
+    if len(quantitative) == 1:
+        return quantitative[0]
+    if len(quantitative) > 1:
+        raise RuntimeError(
+            f"Process '{process_name}' exposes multiple quantitative reference exchanges."
+        )
+    raise RuntimeError(
+        f"Process '{process_name}' does not expose a quantitative reference exchange."
+    )
+
+
+def _exchange_unit_ref(exchange: Any) -> Any | None:
+    unit_ref = _clone_ref(
+        getattr(exchange, "unit", None),
+        ref_type=_enum_ref_type("Unit"),
+    )
+    if unit_ref is not None:
+        return unit_ref
+    flow_property_factor = getattr(exchange, "flow_property_factor", None)
+    return _clone_ref(
+        getattr(flow_property_factor, "unit", None),
+        ref_type=_enum_ref_type("Unit"),
+    )
+
+
+def _exchange_flow_property_ref(exchange: Any) -> Any | None:
+    flow_property_ref = _clone_ref(
+        getattr(exchange, "flow_property", None),
+        ref_type=_enum_ref_type("FlowProperty"),
+    )
+    if flow_property_ref is not None:
+        return flow_property_ref
+    flow_property_factor = getattr(exchange, "flow_property_factor", None)
+    return _clone_ref(
+        getattr(flow_property_factor, "flow_property", None),
+        ref_type=_enum_ref_type("FlowProperty"),
+    )
+
+
+def _exchange_public_flow(exchange: Any) -> dict[str, Any] | None:
+    return _public_ref_summary(getattr(exchange, "flow", None))
+
+
+def _public_functional_unit_payload(
+    *,
+    amount: float,
+    unit_ref: Any | None,
+    flow_property_ref: Any | None,
+    flow_ref: Any | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"amount": amount}
+    unit_name = _extract_ref_name(unit_ref)
+    if unit_name:
+        payload["unit"] = unit_name
+    unit_id = _extract_ref_id(unit_ref)
+    if unit_id:
+        payload["unit_id"] = unit_id
+    flow_property_name = _extract_ref_name(flow_property_ref)
+    if flow_property_name:
+        payload["flow_property"] = flow_property_name
+    flow_property_id = _extract_ref_id(flow_property_ref)
+    if flow_property_id:
+        payload["flow_property_id"] = flow_property_id
+    flow_name = _extract_ref_name(flow_ref)
+    if flow_name:
+        payload["flow_name"] = flow_name
+    flow_id = _extract_ref_id(flow_ref)
+    if flow_id:
+        payload["flow_id"] = flow_id
+    return payload
+
+
+def _public_calculation_target(target: dict[str, Any], *, amount: float | None = None) -> dict[str, Any]:
+    functional_amount = (
+        float(amount)
+        if amount is not None
+        else float(target.get("default_amount") or 1.0)
+    )
+    payload: dict[str, Any] = {
+        "target_type": target["target_type"],
+        "target_id": target["target_id"],
+        "product_system_id": target["product_system_id"],
+        "label": target["label"],
+        "functional_unit": _public_functional_unit_payload(
+            amount=functional_amount,
+            unit_ref=target.get("unit_ref"),
+            flow_property_ref=target.get("flow_property_ref"),
+            flow_ref=target.get("flow_ref"),
+        ),
+    }
+    if target.get("process_id"):
+        payload["process_id"] = target["process_id"]
+    if target.get("process_name"):
+        payload["process_name"] = target["process_name"]
+    if target.get("reference_process_id"):
+        payload["reference_process_id"] = target["reference_process_id"]
+    if target.get("reference_process_name"):
+        payload["reference_process_name"] = target["reference_process_name"]
+    return payload
+
+
+def _normalize_functional_unit_for_target(
+    functional_unit: dict[str, Any] | None,
+    target: dict[str, Any],
+) -> dict[str, Any]:
+    functional_unit = functional_unit or {}
+    amount = _positive_float_or_none(functional_unit.get("amount"))
+    if amount is None:
+        amount = float(target.get("default_amount") or 1.0)
+
+    requested_unit = _clean_text(
+        functional_unit.get("unit_id") or functional_unit.get("unit")
+    ).lower()
+    target_unit_id = _clean_text(_extract_ref_id(target.get("unit_ref"))).lower()
+    target_unit_name = _clean_text(_extract_ref_name(target.get("unit_ref"))).lower()
+    if requested_unit and target_unit_id and requested_unit not in {
+        target_unit_id,
+        target_unit_name,
+    }:
+        raise RuntimeError(
+            f"Functional unit unit '{requested_unit}' does not match the selected "
+            f"calculation target unit '{target_unit_name or target_unit_id}'."
+        )
+
+    requested_flow_property = _clean_text(
+        functional_unit.get("flow_property_id") or functional_unit.get("flow_property")
+    ).lower()
+    target_flow_property_id = _clean_text(
+        _extract_ref_id(target.get("flow_property_ref"))
+    ).lower()
+    target_flow_property_name = _clean_text(
+        _extract_ref_name(target.get("flow_property_ref"))
+    ).lower()
+    if (
+        requested_flow_property
+        and target_flow_property_id
+        and requested_flow_property
+        not in {target_flow_property_id, target_flow_property_name}
+    ):
+        raise RuntimeError(
+            "Functional unit flow property does not match the selected calculation target."
+        )
+
+    return _public_functional_unit_payload(
+        amount=amount,
+        unit_ref=target.get("unit_ref"),
+        flow_property_ref=target.get("flow_property_ref"),
+        flow_ref=target.get("flow_ref"),
+    )
+
+
+def _resolve_product_system_calculation_target(
+    client: Any,
+    product_system_ref: Any,
+    product_system_entity: Any,
+) -> dict[str, Any]:
+    reference_process_id = _pick_reference_process_id(product_system_entity)
+    reference_process_name = ""
+    reference_exchange = None
+    if reference_process_id:
+        reference_process = _safe_get(client, o.Process, reference_process_id)
+        if reference_process is not None:
+            reference_process_name = (
+                _clean_text(getattr(reference_process, "name", None))
+                or _process_ref_map(product_system_entity)
+                .get(reference_process_id, {})
+                .get("name", "")
+            )
+            try:
+                reference_exchange = _resolve_process_reference_exchange(reference_process)
+            except RuntimeError:
+                reference_exchange = None
+
+    target_amount = _positive_float_or_none(getattr(product_system_entity, "target_amount", None))
+    if target_amount is None:
+        target_amount = 1.0
+
+    unit_ref = _clone_ref(
+        getattr(product_system_entity, "target_unit", None),
+        ref_type=_enum_ref_type("Unit"),
+    )
+    if unit_ref is None and reference_exchange is not None:
+        unit_ref = _exchange_unit_ref(reference_exchange)
+
+    flow_property_ref = _clone_ref(
+        getattr(product_system_entity, "target_flow_property", None),
+        ref_type=_enum_ref_type("FlowProperty"),
+    )
+    if flow_property_ref is None and reference_exchange is not None:
+        flow_property_ref = _exchange_flow_property_ref(reference_exchange)
+
+    flow_ref = _clone_ref(getattr(reference_exchange, "flow", None))
+    label = _clean_text(getattr(product_system_ref, "name", None)) or _extract_ref_name(product_system_ref) or "Product system"
+    return {
+        "target_type": "product_system",
+        "target_id": _extract_ref_id(product_system_ref),
+        "product_system_id": _extract_ref_id(product_system_ref),
+        "label": label,
+        "target_ref": _clone_ref(product_system_ref, ref_type=o.RefType.ProductSystem),
+        "default_amount": target_amount,
+        "unit_ref": unit_ref,
+        "flow_property_ref": flow_property_ref,
+        "flow_ref": flow_ref,
+        "reference_process_id": reference_process_id or None,
+        "reference_process_name": reference_process_name or None,
+    }
+
+
+def _resolve_process_calculation_target(
+    client: Any,
+    product_system_ref: Any,
+    product_system_entity: Any,
+    process_id: str,
+) -> dict[str, Any]:
+    process_refs = _process_ref_map(product_system_entity)
+    process_ref = process_refs.get(process_id)
+    if process_ref is None:
+        product_name = _clean_text(getattr(product_system_ref, "name", None)) or _extract_ref_name(product_system_ref) or _extract_ref_id(product_system_ref)
+        raise RuntimeError(
+            f"Process '{process_id}' is not part of product system '{product_name}'."
+        )
+
+    process_entity = _safe_get(client, o.Process, process_id)
+    if process_entity is None:
+        raise RuntimeError(f"Process '{process_id}' could not be loaded from openLCA.")
+
+    reference_exchange = _resolve_process_reference_exchange(process_entity)
+    unit_ref = _exchange_unit_ref(reference_exchange)
+    if unit_ref is None:
+        process_name = (
+            _clean_text(getattr(process_entity, "name", None))
+            or process_ref.get("name")
+            or process_id
+        )
+        raise RuntimeError(
+            f"Process '{process_name}' does not expose a unit on its quantitative reference exchange."
+        )
+
+    process_descriptor = _safe_get(client, o.Process, process_id)
+    process_target_ref = _clone_ref(
+        process_descriptor or process_entity,
+        ref_type=_enum_ref_type("Process"),
+    )
+    process_name = (
+        _clean_text(getattr(process_entity, "name", None))
+        or process_ref.get("name")
+        or process_id
+    )
+    flow_ref = _clone_ref(getattr(reference_exchange, "flow", None))
+    flow_name = _extract_ref_name(flow_ref) or "reference flow"
+    return {
+        "target_type": "process",
+        "target_id": process_id,
+        "product_system_id": _extract_ref_id(product_system_ref),
+        "process_id": process_id,
+        "process_name": process_name,
+        "label": f"{process_name} ({flow_name})",
+        "target_ref": process_target_ref,
+        "default_amount": _positive_float_or_none(getattr(reference_exchange, "amount", None))
+        or 1.0,
+        "unit_ref": unit_ref,
+        "flow_property_ref": _exchange_flow_property_ref(reference_exchange),
+        "flow_ref": flow_ref,
+    }
+
+
+def _resolve_calculation_target(
+    *,
+    client: Any,
+    product_system_ref: Any,
+    product_system_entity: Any,
+    target_type: Any,
+    process_id: str | None,
+) -> dict[str, Any]:
+    try:
+        normalized_target_type = _normalize_target_type(target_type)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    if normalized_target_type == "product_system":
+        return _resolve_product_system_calculation_target(
+            client,
+            product_system_ref,
+            product_system_entity,
+        )
+
+    process_id_clean = _clean_text(process_id)
+    if not process_id_clean:
+        raise RuntimeError("process_id is required when target_type='process'.")
+
+    return _resolve_process_calculation_target(
+        client,
+        product_system_ref,
+        product_system_entity,
+        process_id_clean,
+    )
 
 
 def _collect_product_system_process_refs(product_system: Any) -> list[dict[str, str]]:
@@ -973,17 +1539,40 @@ def _run_single_scenario(
     product_system_ref,
     impact_method_ref,
     parameter_catalog: dict[str, Any] | None,
+    calculation_target: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    redefinitions, functional_units, param_warnings = _extract_parameter_redefinitions(
+    _validate_supported_scenario_model(scenario_model)
+
+    redefinitions, functional_units, param_warnings, diagnostics = _extract_parameter_redefinitions(
         scenario_model,
         parameter_catalog=parameter_catalog,
     )
+    if param_warnings:
+        raise RuntimeError(_scenario_parameter_error_message(param_warnings))
+
+    resolved_target = calculation_target or {
+        "target_type": "product_system",
+        "target_id": _extract_ref_id(product_system_ref),
+        "product_system_id": _extract_ref_id(product_system_ref),
+        "label": _extract_ref_name(product_system_ref) or _extract_ref_id(product_system_ref),
+        "target_ref": _clone_ref(product_system_ref, ref_type=o.RefType.ProductSystem),
+        "default_amount": 1.0,
+        "unit_ref": None,
+        "flow_property_ref": None,
+        "flow_ref": None,
+    }
+    calculation_amount = functional_units
+    if calculation_amount is None:
+        calculation_amount = float(resolved_target.get("default_amount") or 1.0)
 
     setup = o.CalculationSetup(
-        target=product_system_ref,
+        allocation=o.AllocationType.USE_DEFAULT_ALLOCATION,
+        target=resolved_target.get("target_ref") or product_system_ref,
         impact_method=impact_method_ref,
         parameters=redefinitions if redefinitions else None,
-        amount=functional_units,
+        amount=calculation_amount,
+        flow_property=resolved_target.get("flow_property_ref"),
+        unit=resolved_target.get("unit_ref"),
     )
 
     calc_result = client.calculate(setup)
@@ -996,22 +1585,27 @@ def _run_single_scenario(
     finally:
         calc_result.dispose()
 
+    if not impacts:
+        raise RuntimeError(
+            "openLCA returned no LCIA impact values for the selected product system and method."
+        )
+
     scores: dict[str, float] = {}
     score_units: dict[str, str] = {}
     score_items: list[dict[str, Any]] = []
     for impact in impacts:
         identity = _impact_identity(impact, len(scores) + 1)
         label = identity["label"]
-        amount = _coerce_float(impact.amount)
-        if amount is None:
-            amount = 0.0
-        scores[label] = amount
+        impact_amount = _coerce_float(impact.amount)
+        if impact_amount is None:
+            impact_amount = 0.0
+        scores[label] = impact_amount
         unit = _impact_unit(impact)
         if unit and label not in score_units:
             score_units[label] = unit
         item: dict[str, Any] = {
             "indicator": identity["indicator"],
-            "value": amount,
+            "value": impact_amount,
         }
         if identity["impact_category_id"]:
             item["impact_category_id"] = identity["impact_category_id"]
@@ -1019,26 +1613,29 @@ def _run_single_scenario(
             item["unit"] = unit
         score_items.append(item)
 
-    if not scores:
-        scores["openlca_result"] = 0.0
-        param_warnings.append(
-            "No impact values returned by openLCA; using placeholder score."
-        )
-
     payload: dict[str, Any] = {
         "runner": "openlca_ipc",
         "scores": scores,
         "parameter_redefinitions_applied": len(redefinitions),
+        "parameter_redefinitions_requested": diagnostics["unique_parameter_redefinitions"],
+        "parameter_redefinitions_requested_entries": diagnostics["raw_parameter_entries"],
         "parameter_names": [r.name for r in redefinitions if r.name],
+        "calculation_target": _public_calculation_target(
+            resolved_target,
+            amount=calculation_amount,
+        ),
     }
     if score_units:
         payload["score_units"] = score_units
     if score_items:
         payload["score_items"] = score_items
-    if functional_units is not None:
-        payload["functional_units"] = functional_units
-    if param_warnings:
-        payload["warnings"] = param_warnings
+    payload["functional_unit"] = _public_functional_unit_payload(
+        amount=calculation_amount,
+        unit_ref=resolved_target.get("unit_ref"),
+        flow_property_ref=resolved_target.get("flow_property_ref"),
+        flow_ref=resolved_target.get("flow_ref"),
+    )
+    payload["functional_units"] = calculation_amount
     return payload
 
 
@@ -1081,6 +1678,10 @@ def _extract_parameter_redefinitions(
     redefs_by_key: dict[tuple[str, str], Any] = {}
     warnings: list[str] = []
     functional_units: float | None = None
+    diagnostics = {
+        "raw_parameter_entries": 0,
+        "unique_parameter_redefinitions": 0,
+    }
 
     raw_changes = model.get("changes")
     if isinstance(raw_changes, list):
@@ -1089,6 +1690,7 @@ def _extract_parameter_redefinitions(
             out=redefs_by_key,
             warnings=warnings,
             parameter_catalog=parameter_catalog,
+            diagnostics=diagnostics,
         )
         if fu_from_changes is not None:
             functional_units = fu_from_changes
@@ -1124,6 +1726,7 @@ def _extract_parameter_redefinitions(
             out=redefs_by_key,
             warnings=warnings,
             parameter_catalog=parameter_catalog,
+            diagnostics=diagnostics,
         )
 
     if isinstance(process_entries, dict):
@@ -1135,9 +1738,11 @@ def _extract_parameter_redefinitions(
                 out=redefs_by_key,
                 warnings=warnings,
                 parameter_catalog=parameter_catalog,
+                diagnostics=diagnostics,
             )
 
-    return list(redefs_by_key.values()), functional_units, warnings
+    diagnostics["unique_parameter_redefinitions"] = len(redefs_by_key)
+    return list(redefs_by_key.values()), functional_units, warnings, diagnostics
 
 
 def _consume_change_list(
@@ -1145,6 +1750,7 @@ def _consume_change_list(
     out: dict[tuple[str, str], Any],
     warnings: list[str],
     parameter_catalog: dict[str, Any] | None,
+    diagnostics: dict[str, int],
 ) -> float | None:
     functional_units: float | None = None
 
@@ -1169,6 +1775,7 @@ def _consume_change_list(
             continue
 
         if field.startswith("parameters.global."):
+            diagnostics["raw_parameter_entries"] += 1
             raw_name = field[len("parameters.global.") :].strip()
             name = _catalog_global_name(parameter_catalog, raw_name)
             if name is None:
@@ -1191,6 +1798,7 @@ def _consume_change_list(
         process_id_raw = ""
         raw_name = ""
         if field.startswith("parameters.process."):
+            diagnostics["raw_parameter_entries"] += 1
             process_id_raw = _clean_text(raw.get("process_id"))
             raw_name = field[len("parameters.process.") :].strip()
             if not process_id_raw:
@@ -1199,6 +1807,7 @@ def _consume_change_list(
                 )
                 continue
         elif field.startswith("parameters.process:"):
+            diagnostics["raw_parameter_entries"] += 1
             rest = field[len("parameters.process:") :]
             dot = rest.find(".")
             if dot <= 0:
@@ -1250,6 +1859,7 @@ def _consume_parameter_list(
     out: dict[tuple[str, str], Any],
     warnings: list[str],
     parameter_catalog: dict[str, Any] | None,
+    diagnostics: dict[str, int],
 ) -> None:
     if not isinstance(raw_list, list):
         warnings.append(f"Skipped non-list parameter block at '{origin}'.")
@@ -1272,6 +1882,7 @@ def _consume_parameter_list(
             warnings.append(f"Skipped malformed parameter entry at '{origin}'.")
             continue
 
+        diagnostics["raw_parameter_entries"] += 1
         raw_name = str(raw.get("name") or "").strip()
         if not raw_name:
             warnings.append(f"Skipped unnamed parameter at '{origin}'.")
@@ -1766,6 +2377,8 @@ register_goal_seek_routes(
         "run_single_scenario": _run_single_scenario,
         "build_parameter_catalog": _build_parameter_catalog,
         "pick_impact_method": _pick_impact_method,
+        "resolve_calculation_target": _resolve_calculation_target,
+        "public_calculation_target": _public_calculation_target,
         "coerce_float": _coerce_float,
         "olca_schema": o,
         "default_ipc_url": DEFAULT_OPENLCA_IPC_URL,
@@ -1782,6 +2395,9 @@ register_uncertainty_routes(
         "run_single_scenario": _run_single_scenario,
         "build_parameter_catalog": _build_parameter_catalog,
         "pick_impact_method": _pick_impact_method,
+        "resolve_calculation_target": _resolve_calculation_target,
+        "public_calculation_target": _public_calculation_target,
+        "normalize_functional_unit_for_target": _normalize_functional_unit_for_target,
         "coerce_float": _coerce_float,
         "ref_to_public_dict": _ref_to_public_dict,
         "olca_schema": o,

@@ -13,6 +13,7 @@ import '../results.dart';
 import 'document_parameterisation.dart';
 import 'goal_seek_page.dart';
 import 'llm_scenario_controller.dart';
+import 'openlca_calculation_target_selector.dart';
 import 'pdf_download.dart';
 import 'report_exporter.dart';
 import 'scenario_graph_view.dart';
@@ -109,6 +110,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
 
   Map<String, dynamic>? _selectedOpenLcaProductSystem;
   Map<String, dynamic>? _selectedOpenLcaImpactMethod;
+  Map<String, dynamic>? _selectedOpenLcaCalculationTarget;
 
   bool _isLoading = false;
   String? _openAiApiKey;
@@ -1537,6 +1539,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
   Future<Map<String, dynamic>> _runOpenLcaForAllScenarios({
     required String productSystemId,
     required String impactMethodId,
+    required Map<String, dynamic> calculationTarget,
   }) async {
     final scenarioPayload = _buildOpenLcaScenarioPayload();
     if (scenarioPayload.isEmpty) {
@@ -1547,6 +1550,9 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     _guardWebMixedContent(uri);
     final body = jsonEncode({
       'product_system_id': productSystemId,
+      'target_type': (calculationTarget['target_type'] ?? 'product_system').toString(),
+      if ((calculationTarget['process_id'] ?? '').toString().trim().isNotEmpty)
+        'process_id': (calculationTarget['process_id'] ?? '').toString().trim(),
       'impact_method_id': impactMethodId,
       'ipc_url': _openLcaIpcUrl,
       'scenarios': scenarioPayload,
@@ -1589,6 +1595,11 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
 
   Future<void> _openGeneratedGoalSeek(Map<String, dynamic> payload) async {
     if (!mounted) return;
+    final payloadWithPrompt = Map<String, dynamic>.from(payload);
+    final rawPrompt = widget.prompt;
+    if (rawPrompt != null && rawPrompt.trim().isNotEmpty) {
+      payloadWithPrompt['prompt'] = rawPrompt;
+    }
     final productId = (payload['product_system_id'] ?? '').toString().trim();
     final selectedProduct =
         _selectedOpenLcaProductSystem ?? widget.openLcaProductSystem;
@@ -1612,9 +1623,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           parameters: widget.parameters,
           openLcaProductSystem:
               _selectedOpenLcaProductSystem ?? widget.openLcaProductSystem,
+          initialCalculationTarget: _selectedOpenLcaCalculationTarget,
           initialImpactMethod: _selectedOpenLcaImpactMethod,
           userPrompt: widget.prompt,
-          initialPayload: payload,
+          initialPayload: payloadWithPrompt,
           autoStart: true,
         ),
       ),
@@ -1648,6 +1660,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
         builder: (_) => UncertaintyPropagationPage(
           openLcaProductSystem:
               _selectedOpenLcaProductSystem ?? widget.openLcaProductSystem,
+          initialCalculationTarget: _selectedOpenLcaCalculationTarget,
           userPrompt: widget.prompt,
           initialPayload: payload,
           autoStart: true,
@@ -1735,6 +1748,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           processes: widget.processes,
           parameters: widget.parameters,
           openLcaProductSystem: _selectedOpenLcaProductSystem,
+          initialCalculationTarget: _selectedOpenLcaCalculationTarget,
           initialImpactMethod: _selectedOpenLcaImpactMethod,
           userPrompt: widget.prompt,
         ),
@@ -2114,6 +2128,15 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     }
     if (!mounted || selectedProduct == null) return;
 
+    final selectedTarget = await showOpenLcaCalculationTargetDialog(
+      context: context,
+      backendBaseUrl: _openLcaBackendBaseUrl,
+      ipcUrl: _openLcaIpcUrl,
+      productSystem: selectedProduct,
+      currentSelection: _selectedOpenLcaCalculationTarget,
+    );
+    if (!mounted || selectedTarget == null) return;
+
     final selectedImpactMethod = await _showOpenLcaEntityDialog(
       title: 'Choose LCIA Method',
       items: impactMethods,
@@ -2141,12 +2164,14 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     final results = await _runOpenLcaForAllScenarios(
       productSystemId: productSystemId,
       impactMethodId: impactMethodId,
+      calculationTarget: selectedTarget,
     );
     if (!mounted) return;
 
     setState(() {
       _selectedOpenLcaProductSystem = selectedProduct;
       _selectedOpenLcaImpactMethod = selectedImpactMethod;
+      _selectedOpenLcaCalculationTarget = selectedTarget;
     });
 
     final successCount = results.values
@@ -2162,6 +2187,8 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       _selectedOpenLcaImpactMethod ?? const <String, dynamic>{},
       fallback: '(unnamed LCIA method)',
     );
+    final selectedTargetLabel =
+        openLcaCalculationTargetLabel(_selectedOpenLcaCalculationTarget);
     final warningLines = _collectOpenLcaWarnings(results);
     if (warningLines.isNotEmpty) {
       debugPrint(
@@ -2178,6 +2205,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           '$successCount succeeded. '
           '${warningLines.isEmpty ? '' : 'Warnings: ${warningLines.length}. '}'
           'Product system: $selectedProductName. '
+          'Target: $selectedTargetLabel. '
           'Method: $selectedMethodName.',
         ),
       ),
