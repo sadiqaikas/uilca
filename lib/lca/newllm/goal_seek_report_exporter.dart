@@ -60,6 +60,8 @@ class GoalSeekReportExporter {
     required List<GoalSeekReportConstraint> constraints,
     required String productSystemName,
     required String toolName,
+    String? llmModelName,
+    String? llmProviderLabel,
     required String goalModeLabel,
     required String objectiveSummary,
     required String selectedImpactMethodSummary,
@@ -140,6 +142,8 @@ class GoalSeekReportExporter {
             generatedAt: createdAt,
             job: job,
             optimizer: optimizer,
+            llmModelName: llmModelName,
+            llmProviderLabel: llmProviderLabel,
           ),
         ],
       ),
@@ -240,7 +244,8 @@ class GoalSeekReportExporter {
       doc.addPage(
         _buildPortraitPage(
           title: 'User Prompt',
-          description: 'Exact prompt submitted for this optimisation run.',
+          description:
+              'Prompt text used for this optimisation run, normalised for PDF readability.',
           children: [
             _buildTextCard(
               'User prompt',
@@ -258,7 +263,8 @@ class GoalSeekReportExporter {
           title: chunks.length == 1
               ? 'User Prompt'
               : 'User Prompt ${i + 1}/${chunks.length}',
-          description: 'Exact prompt submitted for this optimisation run.',
+          description:
+              'Prompt text used for this optimisation run, normalised for PDF readability.',
           children: [
             _buildTextCard(
               'User prompt',
@@ -690,6 +696,8 @@ class GoalSeekReportExporter {
     required DateTime generatedAt,
     required Map<String, dynamic> job,
     required Map<String, dynamic>? optimizer,
+    String? llmModelName,
+    String? llmProviderLabel,
   }) {
     final objectiveLabel = _asString(
       baseline?['objective_label'] ??
@@ -711,6 +719,10 @@ class GoalSeekReportExporter {
       child: _kvTable([
         ['Status', status],
         ['Tool', toolName],
+        if ((llmModelName ?? '').trim().isNotEmpty)
+          ['LLM model', llmModelName!.trim()],
+        if ((llmProviderLabel ?? '').trim().isNotEmpty)
+          ['LLM provider', llmProviderLabel!.trim()],
         [
           'Product system',
           productSystemName.trim().isEmpty ? 'Not selected' : productSystemName.trim(),
@@ -1715,16 +1727,63 @@ class GoalSeekReportExporter {
   }
 
   static String _cleanText(String value) {
-    return value
-        .replaceAll('\r\n', '\n')
-        .replaceAll('\r', '\n')
-        .replaceAll(RegExp(r'[ \t]+'), ' ')
-        .replaceAll(RegExp(r'\n{3,}'), '\n\n')
-        .trim();
+    return _normalizeReportText(value, preserveLineBreaks: false);
   }
 
   static String _cleanPromptText(String value) {
-    return value.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    return _normalizeReportText(value, preserveLineBreaks: true);
+  }
+
+  static String _normalizeReportText(
+    String value, {
+    required bool preserveLineBreaks,
+  }) {
+    var out = value.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    out = out.replaceAllMapped(
+      RegExp(r'^\s*```[^\n]*\n?', multiLine: true),
+      (_) => '',
+    );
+    out = out.replaceAllMapped(
+      RegExp(r'^\s*#{1,6}\s*', multiLine: true),
+      (_) => '',
+    );
+    out = out.replaceAllMapped(
+      RegExp(r'^\s*[*+-]\s+', multiLine: true),
+      (_) => '- ',
+    );
+    out = out.replaceAllMapped(
+      RegExp(r'\*\*(.+?)\*\*', dotAll: true),
+      (m) => m[1] ?? '',
+    );
+    out = out.replaceAllMapped(
+      RegExp(r'__(.+?)__', dotAll: true),
+      (m) => m[1] ?? '',
+    );
+    out = out.replaceAllMapped(
+      RegExp(r'(?<!\*)\*([^*\n]+)\*(?!\*)'),
+      (m) => m[1] ?? '',
+    );
+    out = out.replaceAllMapped(
+      RegExp(r'(?<!_)_([^_\n]+)_(?!_)'),
+      (m) => m[1] ?? '',
+    );
+    out = out.replaceAllMapped(
+      RegExp(r'`([^`\n]+)`'),
+      (m) => m[1] ?? '',
+    );
+
+    if (preserveLineBreaks) {
+      out = out
+          .replaceAll('\t', '  ')
+          .replaceAll(RegExp(r'[ \t]+\n'), '\n')
+          .replaceAll(RegExp(r'\n{3,}'), '\n\n');
+      return out.trim();
+    }
+
+    return out
+        .replaceAll(RegExp(r'[ \t]+'), ' ')
+        .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+        .trim();
   }
 
   static DateTime? _toDateTime(dynamic secondsValue) {

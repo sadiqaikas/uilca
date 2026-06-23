@@ -3121,6 +3121,7 @@ class ResultsPage extends StatefulWidget {
   final String? generationRouteLabel;
   final Map<String, Map<String, dynamic>>? generationByModel;
   final List<DocumentExtractionRecord>? documentProvenance;
+  final Map<String, dynamic>? baseModel;
 
   const ResultsPage({
     required this.results,
@@ -3134,6 +3135,7 @@ class ResultsPage extends StatefulWidget {
     this.generationRouteLabel,
     this.generationByModel,
     this.documentProvenance,
+    this.baseModel,
     Key? key,
   }) : super(key: key);
 
@@ -3355,14 +3357,16 @@ class _ResultsPageState extends State<ResultsPage> {
         actions: [
           IconButton(
             onPressed: _isExportingPdf ? null : _onExportPdfPressed,
-            tooltip: _isExportingPdf ? 'Exporting PDF...' : 'Export PDF',
+            tooltip: _isExportingPdf
+                ? 'Exporting bundle...'
+                : 'Export reproducibility bundle',
             icon: _isExportingPdf
                 ? const SizedBox(
                     width: 18,
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : const Icon(Icons.picture_as_pdf),
+                : const Icon(Icons.folder_zip),
           ),
         ],
       ),
@@ -3405,16 +3409,46 @@ class _ResultsPageState extends State<ResultsPage> {
         documentProvenance: widget.documentProvenance ?? const [],
       );
 
-      await downloadPdf(
-        bytes: pdfBytes,
-        filename: 'lca_results_by_method_report.pdf',
+      final bundleBytes = await ReportExporter.buildReproducibilityBundle(
+        reportPdfBytes: pdfBytes,
+        reportPdfFilename: 'lca_results_by_method_report.pdf',
+        prompt: promptText.isEmpty
+            ? 'Prompt unavailable (exported from LCA results tab).'
+            : promptText,
+        functionsUsed: widget.functionsUsed ?? const [],
+        rawDeltasByScenario: widget.rawDeltasByScenario ?? const {},
+        mergedScenarios: widget.scenariosMap ?? const <String, dynamic>{},
+        baseModel: widget.baseModel ?? const <String, dynamic>{},
+        lcaResults: widget.results,
+        productSystemName: widget.productSystemName,
+        impactMethodName: widget.impactMethodName,
+        scenarioModelByName:
+            widget.scenarioModelByName ?? const <String, String>{},
+        generationRouteLabel: widget.generationRouteLabel,
+        generationByModel:
+            widget.generationByModel ??
+                const <String, Map<String, dynamic>>{},
+        documentProvenance: widget.documentProvenance ?? const [],
+        productSystem: widget.productSystemName == null
+            ? null
+            : {'name': widget.productSystemName},
+        impactMethod: widget.impactMethodName == null
+            ? null
+            : {'name': widget.impactMethodName},
+      );
+
+      await downloadFile(
+        bytes: bundleBytes,
+        filename: 'lca_results_by_method_reproducibility_bundle.zip',
+        mimeType: 'application/zip',
       );
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'PDF exported as lca_results_by_method_report.pdf '
+            'Reproducibility bundle exported as '
+            'lca_results_by_method_reproducibility_bundle.zip '
             '(${methodChartImages.length} graph snapshot(s)).',
           ),
         ),

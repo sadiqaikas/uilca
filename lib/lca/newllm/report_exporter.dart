@@ -1,5 +1,8 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -10,6 +13,7 @@ import 'document_parameterisation.dart';
 /// Builds a professional PDF report for LLM scenarios and LCA outputs.
 class ReportExporter {
   static const _reportTitle = 'EarlyLCA Scenario Analysis Report';
+  static const _bundleSchemaVersion = 'earlylca.reproducibility-bundle.v1';
 
   /// Builds the report and returns PDF bytes.
   static Future<Uint8List> buildPdf({
@@ -34,11 +38,14 @@ class ReportExporter {
       lcaResults,
       scenarioModelByName: scenarioModelByName,
     );
-    final modelNames = scenarioModelByName.values
-        .map((m) => m.trim())
-        .where((m) => m.isNotEmpty)
-        .toSet()
-        .toList()
+    final modelNames = {
+      ...scenarioModelByName.values
+          .map((m) => m.trim())
+          .where((m) => m.isNotEmpty),
+      ...generationByModel.keys
+          .map((m) => m.trim())
+          .where((m) => m.isNotEmpty),
+    }.toList()
       ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     final generationRows = _normalizeGenerationRows(generationByModel);
     final generationFailures = generationRows
@@ -177,6 +184,12 @@ class ReportExporter {
           pw.Text('LLM Generation Status', style: h2),
           pw.SizedBox(height: 6),
           _buildGenerationStatusTable(generationRows, mono),
+          if (generationByModel.isNotEmpty) ...[
+            pw.SizedBox(height: 10),
+            pw.Text('Model Response Diagnostics', style: h2),
+            pw.SizedBox(height: 6),
+            _buildModelDiagnosticsTable(generationByModel, mono),
+          ],
           pw.SizedBox(height: 14),
           pw.Text('Scenario Change Summary', style: h2),
           pw.SizedBox(height: 6),
@@ -307,6 +320,501 @@ class ReportExporter {
     }
 
     return doc.save();
+  }
+
+  static Uint8List buildReproducibilityBundle({
+    required Uint8List reportPdfBytes,
+    required String reportPdfFilename,
+    required String prompt,
+    required List<String> functionsUsed,
+    required Map<String, List<Map<String, dynamic>>> rawDeltasByScenario,
+    required Map<String, dynamic> mergedScenarios,
+    required Map<String, dynamic> baseModel,
+    required Map<String, dynamic> lcaResults,
+    required Map<String, String> scenarioModelByName,
+    required String? generationRouteLabel,
+    required Map<String, Map<String, dynamic>> generationByModel,
+    required List<DocumentExtractionRecord> documentProvenance,
+    required String? productSystemName,
+    required String? impactMethodName,
+    required Map<String, dynamic>? productSystem,
+    required Map<String, dynamic>? impactMethod,
+    DateTime? generatedAt,
+  }) {
+    final createdAt = generatedAt ?? DateTime.now();
+    final parsed = _ParsedLca.fromRaw(
+      lcaResults,
+      scenarioModelByName: scenarioModelByName,
+    );
+    final files = <String, Uint8List>{
+      reportPdfFilename: reportPdfBytes,
+      'README.md': _utf8Bytes(_bundleReadme(reportPdfFilename)),
+      'manifest.json': Uint8List(0),
+      'inputs/base_model.json': _jsonBytes(baseModel),
+      'inputs/prompt.txt': _utf8Bytes(prompt),
+      'inputs/run_context.json': _jsonBytes({
+        'schema_version': _bundleSchemaVersion,
+        'generated_at': createdAt.toUtc().toIso8601String(),
+        'generation_route': generationRouteLabel,
+        'functions_used': functionsUsed,
+        'product_system_name': productSystemName,
+        'impact_method_name': impactMethodName,
+        'product_system': productSystem,
+        'impact_method': impactMethod,
+      }),
+      'llm/generation_by_model.json': _jsonBytes(generationByModel),
+      'llm/generation_status.csv': _utf8Bytes(
+        _generationStatusCsv(generationByModel),
+      ),
+      'llm/model_diagnostics.json': _jsonBytes(
+        _modelDiagnosticsJson(generationByModel),
+      ),
+      'llm/model_diagnostics.csv': _utf8Bytes(
+        _modelDiagnosticsCsv(generationByModel),
+      ),
+      'llm/scenario_model_map.csv': _utf8Bytes(
+        _scenarioModelMapCsv(scenarioModelByName),
+      ),
+      'llm/scenario_deltas.json': _jsonBytes(rawDeltasByScenario),
+      'llm/scenario_deltas.csv': _utf8Bytes(
+        _scenarioDeltasCsv(rawDeltasByScenario, scenarioModelByName),
+      ),
+      'lca/merged_scenarios.json': _jsonBytes(mergedScenarios),
+      'lca/results_raw.json': _jsonBytes(lcaResults),
+      'lca/impact_scores.csv': _utf8Bytes(_impactScoresCsv(parsed)),
+      'lca/run_status.csv': _utf8Bytes(_lcaStatusCsv(parsed)),
+      'documents/extraction_provenance.json': _jsonBytes(
+        documentProvenance.map((record) => record.toReportJson()).toList(),
+      ),
+      'documents/extraction_provenance.csv': _utf8Bytes(
+        _documentProvenanceCsv(documentProvenance),
+      ),
+    };
+    files.addAll(_modelDiagnosticFiles(generationByModel));
+
+    files['manifest.json'] = _jsonBytes(
+      _bundleManifest(
+        generatedAt: createdAt,
+        files: files,
+        prompt: prompt,
+        rawDeltasByScenario: rawDeltasByScenario,
+        lcaResults: lcaResults,
+        scenarioModelByName: scenarioModelByName,
+        generationByModel: generationByModel,
+      ),
+    );
+    files['checksums.sha256'] = _utf8Bytes(_checksumsText(files));
+
+    final archive = Archive();
+    final names = files.keys.toList()..sort();
+    for (final name in names) {
+      final bytes = files[name]!;
+      archive.addFile(ArchiveFile(name, bytes.length, bytes));
+    }
+
+    return Uint8List.fromList(ZipEncoder().encode(archive)!);
+  }
+
+  static Map<String, dynamic> _bundleManifest({
+    required DateTime generatedAt,
+    required Map<String, Uint8List> files,
+    required String prompt,
+    required Map<String, List<Map<String, dynamic>>> rawDeltasByScenario,
+    required Map<String, dynamic> lcaResults,
+    required Map<String, String> scenarioModelByName,
+    required Map<String, Map<String, dynamic>> generationByModel,
+  }) {
+    final fileEntries = <Map<String, dynamic>>[];
+    final names = files.keys.where((name) => name != 'manifest.json').toList()
+      ..sort();
+    for (final name in names) {
+      final bytes = files[name]!;
+      fileEntries.add({
+        'path': name,
+        'bytes': bytes.length,
+        'sha256': sha256.convert(bytes).toString(),
+      });
+    }
+    return {
+      'schema_version': _bundleSchemaVersion,
+      'generated_at': generatedAt.toUtc().toIso8601String(),
+      'summary': {
+        'prompt_sha256': sha256.convert(_utf8Bytes(prompt)).toString(),
+        'scenario_count': rawDeltasByScenario.length,
+        'change_count': rawDeltasByScenario.values.fold<int>(
+          0,
+          (sum, changes) => sum + changes.length,
+        ),
+        'lca_result_count': lcaResults.length,
+        'models': {
+          ...scenarioModelByName.values
+              .map((m) => m.trim())
+              .where((m) => m.isNotEmpty),
+          ...generationByModel.keys
+              .map((m) => m.trim())
+              .where((m) => m.isNotEmpty),
+        }.toList()
+          ..sort(),
+        'generation_status': {
+          for (final entry in generationByModel.entries)
+            entry.key: entry.value['status']?.toString() ?? 'unknown',
+        },
+      },
+      'files': fileEntries,
+    };
+  }
+
+  static String _bundleReadme(String reportPdfFilename) => '''
+# EarlyLCA Reproducibility Bundle
+
+This archive contains the human-readable PDF report plus the machine-readable
+inputs, model outputs, LCA results, and checksums needed to audit or rerun the
+scenario analysis.
+
+Recommended review order:
+
+1. Open `$reportPdfFilename` for the narrative report.
+2. Inspect `manifest.json` and `checksums.sha256` to verify file integrity.
+3. Review `inputs/base_model.json` and `inputs/run_context.json` for the exact
+   starting model, product system, impact method, prompt, and run metadata.
+4. Review `llm/generation_by_model.json` and `llm/scenario_deltas.json` for the
+   exact LLM generation status and accepted scenario edits.
+5. Review `llm/model_diagnostics.json`, `llm/model_diagnostics.csv`, and
+   `llm/model_responses/<model>/` for per-model finish reasons, assistant text,
+   parsed payloads, validation outcomes, and failure details.
+6. Review `lca/merged_scenarios.json`, `lca/results_raw.json`, and
+   `lca/impact_scores.csv` for the calculated scenario outputs.
+
+The bundle records generated outputs and configuration. It does not include
+external background database files, openLCA databases, Brightway databases, API
+keys, or provider-side model snapshots.
+''';
+
+  static Uint8List _jsonBytes(Object? value) {
+    const encoder = JsonEncoder.withIndent('  ');
+    return _utf8Bytes('${encoder.convert(_stableJsonValue(value))}\n');
+  }
+
+  static Uint8List _utf8Bytes(String value) =>
+      Uint8List.fromList(utf8.encode(value));
+
+  static Object? _stableJsonValue(Object? value) {
+    if (value is Map) {
+      final entries = value.entries.toList()
+        ..sort((a, b) => a.key.toString().compareTo(b.key.toString()));
+      return {
+        for (final entry in entries)
+          entry.key.toString(): _stableJsonValue(entry.value),
+      };
+    }
+    if (value is Iterable) {
+      return value.map(_stableJsonValue).toList();
+    }
+    return value;
+  }
+
+  static String _checksumsText(Map<String, Uint8List> files) {
+    final names = files.keys.toList()..sort();
+    return names
+        .map((name) => '${sha256.convert(files[name]!).toString()}  $name')
+        .join('\n') + '\n';
+  }
+
+  static String _scenarioModelMapCsv(Map<String, String> scenarioModelByName) {
+    final rows = <List<String>>[
+      const ['scenario', 'model'],
+      for (final entry in (scenarioModelByName.entries.toList()
+        ..sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase()))))
+        [entry.key, entry.value],
+    ];
+    return _csv(rows);
+  }
+
+  static String _generationStatusCsv(
+    Map<String, Map<String, dynamic>> generationByModel,
+  ) {
+    final rows = <List<String>>[
+      const ['model', 'status', 'scenario_count', 'reason', 'error'],
+    ];
+    final entries = generationByModel.entries.toList()
+      ..sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase()));
+    for (final entry in entries) {
+      rows.add([
+        entry.key,
+        entry.value['status']?.toString() ?? '',
+        entry.value['scenario_count']?.toString() ?? '',
+        entry.value['reason']?.toString() ?? '',
+        entry.value['error']?.toString() ?? '',
+      ]);
+    }
+    return _csv(rows);
+  }
+
+  static List<Map<String, dynamic>> _modelDiagnosticsJson(
+    Map<String, Map<String, dynamic>> generationByModel,
+  ) {
+    final entries = generationByModel.entries.toList()
+      ..sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase()));
+    return [
+      for (final entry in entries)
+        {
+          'model': entry.key,
+          'status': entry.value['status']?.toString() ?? '',
+          'scenario_count': entry.value['scenario_count'] ?? 0,
+          if (entry.value['reason'] != null) 'reason': entry.value['reason'],
+          if (entry.value['error'] != null) 'error': entry.value['error'],
+          if (entry.value['required_capability'] != null)
+            'required_capability': entry.value['required_capability'],
+          'diagnostics': _diagnosticsMap(entry.value),
+        },
+    ];
+  }
+
+  static String _modelDiagnosticsCsv(
+    Map<String, Map<String, dynamic>> generationByModel,
+  ) {
+    final rows = <List<String>>[
+      const [
+        'model',
+        'status',
+        'scenario_count',
+        'finish_reason',
+        'accepted_as',
+        'validation_status',
+        'failure_reason',
+        'required_capability',
+        'content_chars',
+        'tool_calls',
+        'reason_or_error',
+      ],
+    ];
+    final entries = generationByModel.entries.toList()
+      ..sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase()));
+    for (final entry in entries) {
+      final row = entry.value;
+      final diagnostics = _diagnosticsMap(row);
+      final firstResponse = _mapAt(diagnostics, 'first_response');
+      final choice = _mapAt(firstResponse, 'choice');
+      final payloadParse = _mapAt(diagnostics, 'payload_parse');
+      final validation = _mapAt(diagnostics, 'validation');
+      final abstention = _mapAt(validation, 'abstention');
+      final toolCalls = choice['tool_calls'] is List
+          ? (choice['tool_calls'] as List)
+              .map((tool) {
+                if (tool is! Map) return tool.toString();
+                final fn = tool['function'];
+                if (fn is! Map) return tool.toString();
+                return (fn['name'] ?? '').toString();
+              })
+              .where((name) => name.isNotEmpty)
+              .join(' | ')
+          : '';
+      rows.add([
+        entry.key,
+        row['status']?.toString() ?? '',
+        row['scenario_count']?.toString() ?? '',
+        choice['finish_reason']?.toString() ?? '',
+        payloadParse['accepted_as']?.toString() ?? '',
+        validation['status']?.toString() ?? '',
+        payloadParse['failure_reason']?.toString() ?? '',
+        row['required_capability']?.toString() ??
+            abstention['required_capability']?.toString() ??
+            '',
+        choice['content_chars']?.toString() ?? '',
+        toolCalls,
+        row['reason']?.toString() ?? row['error']?.toString() ?? '',
+      ]);
+    }
+    return _csv(rows);
+  }
+
+  static Map<String, Uint8List> _modelDiagnosticFiles(
+    Map<String, Map<String, dynamic>> generationByModel,
+  ) {
+    final files = <String, Uint8List>{};
+    final entries = generationByModel.entries.toList()
+      ..sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase()));
+    for (final entry in entries) {
+      final diagnostics = _diagnosticsMap(entry.value);
+      if (diagnostics.isEmpty) continue;
+      final folder = 'llm/model_responses/${_safePathSegment(entry.key)}';
+      files['$folder/diagnostics.json'] = _jsonBytes(diagnostics);
+
+      final firstContent =
+          _mapAt(_mapAt(diagnostics, 'first_response'), 'choice')['content'];
+      if (firstContent != null && firstContent.toString().isNotEmpty) {
+        files['$folder/first_assistant_content.txt'] =
+            _utf8Bytes(firstContent.toString());
+      }
+
+      final secondContent =
+          _mapAt(_mapAt(diagnostics, 'second_response'), 'choice')['content'];
+      if (secondContent != null && secondContent.toString().isNotEmpty) {
+        files['$folder/second_assistant_content.txt'] =
+            _utf8Bytes(secondContent.toString());
+      }
+
+      final selectedPayload =
+          _mapAt(diagnostics, 'payload_parse')['selected_payload'];
+      if (selectedPayload != null) {
+        files['$folder/selected_payload.json'] = _jsonBytes(selectedPayload);
+      }
+    }
+    return files;
+  }
+
+  static Map<String, dynamic> _diagnosticsMap(Map<String, dynamic> row) {
+    final raw = row['diagnostics'];
+    return raw is Map ? raw.cast<String, dynamic>() : const <String, dynamic>{};
+  }
+
+  static Map<String, dynamic> _mapAt(Map<String, dynamic> map, String key) {
+    final raw = map[key];
+    return raw is Map ? raw.cast<String, dynamic>() : const <String, dynamic>{};
+  }
+
+  static String _safePathSegment(String value) {
+    final cleaned = value
+        .replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    return cleaned.isEmpty ? 'model' : cleaned;
+  }
+
+  static String _scenarioDeltasCsv(
+    Map<String, List<Map<String, dynamic>>> rawDeltasByScenario,
+    Map<String, String> scenarioModelByName,
+  ) {
+    final rows = <List<String>>[
+      const [
+        'scenario',
+        'model',
+        'change_index',
+        'process_id',
+        'flow_id',
+        'field',
+        'new_value',
+        'change_json',
+      ],
+    ];
+    final entries = rawDeltasByScenario.entries.toList()
+      ..sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase()));
+    for (final entry in entries) {
+      final changes = entry.value;
+      for (var i = 0; i < changes.length; i += 1) {
+        final change = changes[i];
+        rows.add([
+          entry.key,
+          scenarioModelByName[entry.key] ?? '',
+          '${i + 1}',
+          change['process_id']?.toString() ?? '',
+          change['flow_id']?.toString() ?? '',
+          change['field']?.toString() ?? '',
+          change['new_value']?.toString() ?? '',
+          jsonEncode(_stableJsonValue(change)),
+        ]);
+      }
+    }
+    return _csv(rows);
+  }
+
+  static String _impactScoresCsv(_ParsedLca parsed) {
+    final rows = <List<String>>[
+      const ['scenario', 'model', 'impact_category', 'unit', 'score'],
+    ];
+    for (final scenario in parsed.scenarios) {
+      final methods = scenario.scores.keys.toList()
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      for (final method in methods) {
+        rows.add([
+          scenario.name,
+          scenario.modelName ?? '',
+          method,
+          parsed.methodUnits[method] ?? '',
+          _fmtNum(scenario.scores[method]!),
+        ]);
+      }
+    }
+    return _csv(rows);
+  }
+
+  static String _lcaStatusCsv(_ParsedLca parsed) {
+    final rows = <List<String>>[
+      const [
+        'scenario',
+        'model',
+        'success',
+        'method_count',
+        'warnings',
+        'error',
+      ],
+      for (final scenario in parsed.scenarios)
+        [
+          scenario.name,
+          scenario.modelName ?? '',
+          scenario.success ? 'true' : 'false',
+          scenario.scores.length.toString(),
+          scenario.warnings.join(' | '),
+          scenario.error ?? '',
+        ],
+    ];
+    return _csv(rows);
+  }
+
+  static String _documentProvenanceCsv(List<DocumentExtractionRecord> records) {
+    final rows = <List<String>>[
+      const [
+        'document',
+        'query',
+        'assumptions',
+        'match_index',
+        'page_number',
+        'table_index',
+        'score',
+        'match_json',
+      ],
+    ];
+    for (final record in records) {
+      for (var i = 0; i < record.matches.length; i += 1) {
+        final match = record.matches[i];
+        rows.add([
+          record.sourceLabel,
+          record.query,
+          record.assumptions.join(' | '),
+          '${i + 1}',
+          match['page_number']?.toString() ?? '',
+          match['table_index']?.toString() ?? '',
+          match['score']?.toString() ?? '',
+          jsonEncode(_stableJsonValue(match)),
+        ]);
+      }
+      if (record.matches.isEmpty) {
+        rows.add([
+          record.sourceLabel,
+          record.query,
+          record.assumptions.join(' | '),
+          '',
+          '',
+          '',
+          '',
+          '',
+        ]);
+      }
+    }
+    return _csv(rows);
+  }
+
+  static String _csv(List<List<String>> rows) {
+    return rows.map((row) => row.map(_csvCell).join(',')).join('\n') + '\n';
+  }
+
+  static String _csvCell(String value) {
+    final needsQuotes = value.contains(',') ||
+        value.contains('"') ||
+        value.contains('\n') ||
+        value.contains('\r');
+    if (!needsQuotes) return value;
+    return '"${value.replaceAll('"', '""')}"';
   }
 
   static Iterable<String> _collectTextSamples({
@@ -676,6 +1184,85 @@ class ReportExporter {
         3: pw.FlexColumnWidth(5),
       },
     );
+  }
+
+  static pw.Widget _buildModelDiagnosticsTable(
+    Map<String, Map<String, dynamic>> generationByModel,
+    pw.TextStyle mono,
+  ) {
+    final rows = _modelDiagnosticRows(generationByModel);
+    if (rows.isEmpty) {
+      return pw.Text(
+        'No model response diagnostics were captured.',
+        style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+      );
+    }
+    return pw.TableHelper.fromTextArray(
+      headerDecoration: const pw.BoxDecoration(color: PdfColors.grey300),
+      headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8),
+      cellStyle: mono.copyWith(fontSize: 8),
+      border: pw.TableBorder.all(color: PdfColors.grey500, width: 0.45),
+      headers: const [
+        'Model',
+        'Finish',
+        'Accepted as',
+        'Validation',
+        'Failure / Reason',
+      ],
+      data: rows
+          .map(
+            (row) => <String>[
+              row['model'] ?? '',
+              row['finish_reason'] ?? '',
+              row['accepted_as'] ?? '',
+              row['validation_status'] ?? '',
+              row['failure_or_reason'] ?? '',
+            ],
+          )
+          .toList(),
+      columnWidths: const {
+        0: pw.FlexColumnWidth(3),
+        1: pw.FlexColumnWidth(1.2),
+        2: pw.FlexColumnWidth(2.2),
+        3: pw.FlexColumnWidth(1.5),
+        4: pw.FlexColumnWidth(4),
+      },
+    );
+  }
+
+  static List<Map<String, String>> _modelDiagnosticRows(
+    Map<String, Map<String, dynamic>> generationByModel,
+  ) {
+    final entries = generationByModel.entries.toList()
+      ..sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase()));
+    return [
+      for (final entry in entries)
+        _modelDiagnosticSummaryRow(entry.key, entry.value),
+    ];
+  }
+
+  static Map<String, String> _modelDiagnosticSummaryRow(
+    String model,
+    Map<String, dynamic> row,
+  ) {
+    final diagnostics = _diagnosticsMap(row);
+    final firstResponse = _mapAt(diagnostics, 'first_response');
+    final choice = _mapAt(firstResponse, 'choice');
+    final payloadParse = _mapAt(diagnostics, 'payload_parse');
+    final validation = _mapAt(diagnostics, 'validation');
+    final abstention = _mapAt(validation, 'abstention');
+    final reason = row['reason']?.toString() ??
+        row['error']?.toString() ??
+        payloadParse['failure_reason']?.toString() ??
+        abstention['reason']?.toString() ??
+        '';
+    return {
+      'model': model,
+      'finish_reason': choice['finish_reason']?.toString() ?? '-',
+      'accepted_as': payloadParse['accepted_as']?.toString() ?? '-',
+      'validation_status': validation['status']?.toString() ?? '-',
+      'failure_or_reason': reason.isEmpty ? '-' : reason,
+    };
   }
 
   static List<_GenerationStatusRow> _normalizeGenerationRows(

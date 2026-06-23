@@ -10,14 +10,16 @@ import time
 import uuid
 from typing import Any, Callable
 
+import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 try:
-    from scipy.optimize import NonlinearConstraint, shgo
+    from scipy.optimize import NonlinearConstraint, minimize, shgo
     from scipy.spatial import QhullError
 except Exception as exc:  # pragma: no cover - env dependent
     NonlinearConstraint = None  # type: ignore[assignment]
+    minimize = None  # type: ignore[assignment]
     shgo = None  # type: ignore[assignment]
     QhullError = RuntimeError  # type: ignore[assignment]
     SCIPY_IMPORT_ERROR = str(exc)
@@ -75,6 +77,15 @@ class OpenLcaGoalSeekStartRequest(BaseModel):
 _GOAL_SEEK_JOBS: dict[str, dict[str, Any]] = {}
 _GOAL_SEEK_LOCK = threading.Lock()
 _MAX_GOAL_SEEK_EVENTS = 120
+_MAX_RETAINED_GOAL_SEEK_JOBS = 20
+_GOAL_SEEK_JOB_TTL_SECONDS = 60 * 60
+_DEFAULT_GOAL_SEEK_N = 256
+_DEFAULT_GOAL_SEEK_ITERS = 4
+_DEFAULT_GOAL_SEEK_SAMPLING_METHOD = "sobol"
+_DEFAULT_LOCAL_POLISH_STARTS = 16
+_DEFAULT_GOAL_SEEK_TOTAL_EVALUATION_LIMIT = 880
+_THRESHOLD_GOAL_SEEK_N = 32
+_THRESHOLD_GOAL_SEEK_ITERS = 1
 
 
 def _goal_seek_mode(request: OpenLcaGoalSeekStartRequest) -> str:
@@ -84,6 +95,18 @@ def _goal_seek_mode(request: OpenLcaGoalSeekStartRequest) -> str:
     if objective is not None and _is_true_threshold_problem(request, objective):
         return "parameter_threshold"
     return "constrained_optimization"
+
+
+def _goal_seek_solver_settings(request: OpenLcaGoalSeekStartRequest) -> tuple[int, int]:
+    mode = _goal_seek_mode(request)
+    if mode == "parameter_threshold":
+        return _THRESHOLD_GOAL_SEEK_N, _THRESHOLD_GOAL_SEEK_ITERS
+    return _DEFAULT_GOAL_SEEK_N, _DEFAULT_GOAL_SEEK_ITERS
+
+
+def _goal_seek_sampling_method(request: OpenLcaGoalSeekStartRequest) -> str:
+    _ = request
+    return _DEFAULT_GOAL_SEEK_SAMPLING_METHOD
 
 
 def _goal_seek_objective(request: OpenLcaGoalSeekStartRequest) -> GoalSeekObjective:
@@ -151,6 +174,7 @@ def _best_feasible_evaluation(
 
 def _goal_seek_request_summary(request: OpenLcaGoalSeekStartRequest) -> dict[str, Any]:
     objective = _goal_seek_objective(request)
+    n, iters = _goal_seek_solver_settings(request)
     method_keys = {
         f"{(constraint.impact_method_id or request.impact_method_id or '').strip()}|"
         f"{(constraint.impact_method_name or request.impact_method_name or '').strip()}"
@@ -175,9 +199,9 @@ def _goal_seek_request_summary(request: OpenLcaGoalSeekStartRequest) -> dict[str
         "objective": objective.model_dump(),
         "variable_count": len(request.variables),
         "constraint_count": len(request.constraints),
-        "n": request.n,
-        "iters": request.iters,
-        "sampling_method": request.sampling_method,
+        "n": n,
+        "iters": iters,
+        "sampling_method": _goal_seek_sampling_method(request),
         "prompt": (request.prompt or "").strip(),
     }
 
@@ -238,8 +262,9 @@ def _sampling_method_retry_order(preferred: str) -> list[str]:
 def _build_shgo_options(
     request: OpenLcaGoalSeekStartRequest,
 ) -> dict[str, Any]:
+    n, iters = _goal_seek_solver_settings(request)
     dimension = max(1, len(request.variables))
-    sampling_budget = max(1, int(request.n) * int(request.iters))
+    sampling_budget = max(1, n * iters)
     local_iter = min(24, max(8, dimension * 4))
     time_budget_seconds = min(420.0, max(120.0, float(sampling_budget) * 0.75))
     return {
@@ -264,7 +289,8 @@ def _run_shgo_with_qhull_retry(
     minimizer_kwargs: dict[str, Any],
     request: OpenLcaGoalSeekStartRequest,
 ) -> tuple[Any, str]:
-    attempts = _sampling_method_retry_order(request.sampling_method)
+    n, iters = _goal_seek_solver_settings(request)
+    attempts = _sampling_method_retry_order(_goal_seek_sampling_method(request))
     shgo_options = _build_shgo_options(request)
     last_error: Exception | None = None
     for attempt_index, sampling_method in enumerate(attempts, start=1):
@@ -278,8 +304,8 @@ def _run_shgo_with_qhull_retry(
                     "bounds": bounds,
                     "constraint_count": len(request.constraints),
                     "local_minimizer": "SLSQP",
-                    "n": request.n,
-                    "iters": request.iters,
+                    "n": n,
+                    "iters": iters,
                     "sampling_method": sampling_method,
                     "options": shgo_options,
                     "attempt": attempt_index,
@@ -292,8 +318,8 @@ def _run_shgo_with_qhull_retry(
                 "Retrying SHGO after a Qhull triangulation failure.",
                 details={
                     "method": "scipy.optimize.shgo",
-                    "n": request.n,
-                    "iters": request.iters,
+                    "n": n,
+                    "iters": iters,
                     "sampling_method": sampling_method,
                     "options": shgo_options,
                     "attempt": attempt_index,
@@ -307,8 +333,8 @@ def _run_shgo_with_qhull_retry(
                     bounds,
                     constraints=constraints,
                     minimizer_kwargs=minimizer_kwargs,
-                    n=request.n,
-                    iters=request.iters,
+                    n=n,
+                    iters=iters,
                     options=shgo_options,
                     sampling_method=sampling_method,
                 ),
@@ -516,7 +542,7 @@ def register_goal_seek_routes(app: FastAPI, deps: dict[str, Any]) -> None:
     def start_goal_seek(request: OpenLcaGoalSeekStartRequest) -> dict[str, Any]:
         """Start a constrained black-box optimization job over openLCA parameters."""
         deps["ensure_openlca_available"]()
-        if SCIPY_IMPORT_ERROR is not None or shgo is None or NonlinearConstraint is None:
+        if SCIPY_IMPORT_ERROR is not None or shgo is None:
             raise HTTPException(
                 status_code=500,
                 detail=f"SciPy optimization dependencies are unavailable: {SCIPY_IMPORT_ERROR}",
@@ -526,12 +552,13 @@ def register_goal_seek_routes(app: FastAPI, deps: dict[str, Any]) -> None:
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+        now = time.time()
         job_id = str(uuid.uuid4())
         job = {
             "job_id": job_id,
             "status": "queued",
-            "created_at": time.time(),
-            "updated_at": time.time(),
+            "created_at": now,
+            "updated_at": now,
             "request": request.model_dump(),
             "events": [],
             "evaluations": [],
@@ -542,6 +569,7 @@ def register_goal_seek_routes(app: FastAPI, deps: dict[str, Any]) -> None:
             "cancel_requested": False,
         }
         with _GOAL_SEEK_LOCK:
+            _prune_goal_seek_jobs(now)
             _GOAL_SEEK_JOBS[job_id] = job
         _append_goal_seek_event(
             job_id,
@@ -609,6 +637,34 @@ def _append_goal_seek_evaluation(job_id: str, evaluation: dict[str, Any]) -> Non
         job["updated_at"] = time.time()
 
 
+def _prune_goal_seek_jobs(now: float) -> None:
+    inactive = [
+        (
+            float(job.get("updated_at") or job.get("created_at") or 0.0),
+            job_id,
+        )
+        for job_id, job in _GOAL_SEEK_JOBS.items()
+        if str(job.get("status") or "") in {"completed", "failed", "cancelled"}
+    ]
+    expired_ids = {
+        job_id
+        for updated_at, job_id in inactive
+        if updated_at > 0 and now - updated_at > _GOAL_SEEK_JOB_TTL_SECONDS
+    }
+    excess_count = max(
+        0,
+        len(_GOAL_SEEK_JOBS) - len(expired_ids) - _MAX_RETAINED_GOAL_SEEK_JOBS,
+    )
+    if excess_count:
+        retained_inactive = [
+            item for item in inactive if item[1] not in expired_ids
+        ]
+        retained_inactive.sort()
+        expired_ids.update(job_id for _, job_id in retained_inactive[:excess_count])
+    for job_id in expired_ids:
+        _GOAL_SEEK_JOBS.pop(job_id, None)
+
+
 def _parameter_objective_index(objective: GoalSeekObjective) -> int:
     return objective.variable_index if objective.variable_index is not None else 0
 
@@ -657,6 +713,64 @@ def _constraint_signed_violation(constraint_value: dict[str, Any]) -> float:
     return abs(numeric_value - target)
 
 
+def _evaluation_constraint_violation_score(evaluation: dict[str, Any]) -> float:
+    constraints = evaluation.get("constraints")
+    if not isinstance(constraints, list):
+        return math.inf
+    score = 0.0
+    for constraint in constraints:
+        if not isinstance(constraint, dict):
+            return math.inf
+        violation = _constraint_signed_violation(constraint)
+        if not math.isfinite(violation):
+            return math.inf
+        score += max(0.0, violation)
+    return score
+
+
+def _local_polish_start_points(
+    evaluations: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[list[float]]:
+    feasible = [
+        evaluation
+        for evaluation in evaluations
+        if _is_feasible_evaluation(evaluation)
+    ]
+    infeasible = [
+        evaluation
+        for evaluation in evaluations
+        if isinstance(evaluation, dict) and not _is_feasible_evaluation(evaluation)
+    ]
+    feasible.sort(key=_evaluation_objective_sort_key)
+    infeasible.sort(
+        key=lambda evaluation: (
+            _evaluation_constraint_violation_score(evaluation),
+            _evaluation_objective_sort_key(evaluation),
+        )
+    )
+
+    selected: list[list[float]] = []
+    seen: set[tuple[float, ...]] = set()
+    for evaluation in feasible + infeasible:
+        if len(selected) >= limit:
+            break
+        x_raw = evaluation.get("x")
+        if not isinstance(x_raw, (list, tuple)):
+            continue
+        try:
+            x = [float(value) for value in x_raw]
+        except (TypeError, ValueError):
+            continue
+        key = tuple(round(value, 12) for value in x)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(x)
+    return selected
+
+
 def _threshold_proof_point(evaluation: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(evaluation, dict):
         return None
@@ -702,7 +816,8 @@ def _run_bracketed_threshold_solver(
     lower: float,
     upper: float,
 ) -> dict[str, Any]:
-    scan_points = min(257, max(9, int(request.n) + 1))
+    n, iters = _goal_seek_solver_settings(request)
+    scan_points = min(257, max(9, int(n) + 1))
     xs = _threshold_scan_points(lower, upper, scan_points)
     _append_goal_seek_event(
         job_id,
@@ -757,14 +872,14 @@ def _run_bracketed_threshold_solver(
             "upper_point": _threshold_proof_point(scan_evaluations[-1]),
         }
         return {
-            "optimizer": {
-                "method": "parameter_threshold_scan_bisect",
-                "success": False,
-                "message": "No feasible point found within the parameter bounds.",
-                "scan_points": scan_points,
-                "transition_count": transition_count,
-                "iterations": 0,
-            },
+                "optimizer": {
+                    "method": "parameter_threshold_scan_bisect",
+                    "success": False,
+                    "message": "No feasible point found within the parameter bounds.",
+                    "scan_points": scan_points,
+                    "transition_count": transition_count,
+                    "iterations": 0,
+                },
             "best": None,
             "proof_bracket": proof,
             "completion_message": "Optimization completed without a feasible point.",
@@ -864,16 +979,16 @@ def _run_bracketed_threshold_solver(
         details=proof,
     )
     return {
-        "optimizer": {
-            "method": "parameter_threshold_scan_bisect",
-            "success": True,
-            "message": "Bracketed threshold solved with scan plus bisection.",
-            "scan_points": scan_points,
-            "transition_count": transition_count,
-            "iterations": iterations,
-            "bracket_width": final_upper_x - final_lower_x,
-            "threshold_value": final_upper_x,
-        },
+            "optimizer": {
+                "method": "parameter_threshold_scan_bisect",
+                "success": True,
+                "message": "Bracketed threshold solved with scan plus bisection.",
+                "scan_points": scan_points,
+                "transition_count": transition_count,
+                "iterations": iterations,
+                "bracket_width": final_upper_x - final_lower_x,
+                "threshold_value": final_upper_x,
+            },
         "best": upper_eval,
         "proof_bracket": proof,
         "completion_message": "Optimization completed.",
@@ -959,6 +1074,7 @@ def _run_goal_seek_job(
 
         cache: dict[tuple[float, ...], dict[str, Any]] = {}
         rejected_probe_cache: set[tuple[float, ...]] = set()
+        evaluation_limit: int | None = None
 
         def evaluate_vector(x_raw: Any) -> dict[str, Any]:
             if _goal_seek_cancelled(job_id):
@@ -974,6 +1090,8 @@ def _run_goal_seek_job(
             cached = cache.get(cache_key)
             if cached is not None:
                 return cached
+            if evaluation_limit is not None and len(cache) >= evaluation_limit:
+                raise RuntimeError("Goal-seek backend evaluation guard reached.")
 
             evaluation_index = len(cache) + 1
             changes = [
@@ -1172,6 +1290,7 @@ def _run_goal_seek_job(
                 details=_evaluation_summary(solver_initial),
             )
 
+        n, iters = _goal_seek_solver_settings(request)
         if _threshold_solver_supported(request):
             threshold_result = _run_bracketed_threshold_solver(
                 job_id=job_id,
@@ -1195,8 +1314,8 @@ def _run_goal_seek_job(
                         [item for item in cache.values() if item.get("feasible")]
                     ),
                     "solver_settings": {
-                        "n": request.n,
-                        "iters": request.iters,
+                        "n": n,
+                        "iters": iters,
                         "sampling_method": request.sampling_method,
                     },
                 },
@@ -1212,8 +1331,8 @@ def _run_goal_seek_job(
                         [item for item in cache.values() if item.get("feasible")]
                     ),
                     "solver_settings": {
-                        "n": request.n,
-                        "iters": request.iters,
+                        "n": n,
+                        "iters": iters,
                         "sampling_method": request.sampling_method,
                     },
                 },
@@ -1243,11 +1362,9 @@ def _run_goal_seek_job(
                 return _objective_penalty()
             return float(evaluate_vector(x)["objective_value"])
 
-        constraints = ()
+        constraints: tuple[dict[str, Any], ...] = ()
         if request.constraints:
-            lower, upper = _constraint_bounds(request.constraints)
-
-            def constraint_fun(x: Any) -> list[float]:
+            def constraint_values_for_x(x: Any) -> list[float]:
                 rejected = _reject_probe_if_needed(
                     x,
                     reason="constraint",
@@ -1282,7 +1399,42 @@ def _run_goal_seek_job(
                     values.append(math.nan if value is None else float(value))
                 return values
 
-            constraints = (NonlinearConstraint(constraint_fun, lower, upper),)
+            def inequality_residuals(x: Any) -> Any:
+                values = constraint_values_for_x(x)
+                residuals = []
+                for index, constraint in enumerate(request.constraints):
+                    target = float(constraint.target)
+                    if constraint.operator == "<=":
+                        residuals.append(target - values[index])
+                    elif constraint.operator == ">=":
+                        residuals.append(values[index] - target)
+                return np.asarray(residuals, dtype=float)
+
+            def equality_residuals(x: Any) -> Any:
+                values = constraint_values_for_x(x)
+                residuals = [
+                    values[index] - float(constraint.target)
+                    for index, constraint in enumerate(request.constraints)
+                    if constraint.operator == "=="
+                ]
+                return np.asarray(residuals, dtype=float)
+
+            constraint_dicts: list[dict[str, Any]] = []
+            if any(constraint.operator in {"<=", ">="} for constraint in request.constraints):
+                constraint_dicts.append(
+                    {
+                        "type": "ineq",
+                        "fun": inequality_residuals,
+                    }
+                )
+            if any(constraint.operator == "==" for constraint in request.constraints):
+                constraint_dicts.append(
+                    {
+                        "type": "eq",
+                        "fun": equality_residuals,
+                    }
+                )
+            constraints = tuple(constraint_dicts)
 
         bounds_tuple = tuple(bounds)
         minimizer_kwargs = {
@@ -1293,6 +1445,127 @@ def _run_goal_seek_job(
                 "ftol": 1e-9,
             },
         }
+        if request.constraints and NonlinearConstraint is not None:
+            lower, upper = _constraint_bounds(request.constraints)
+
+            def local_constraint_values(x: Any) -> Any:
+                return np.asarray(constraint_values_for_x(x), dtype=float)
+
+            minimizer_kwargs["constraints"] = (
+                NonlinearConstraint(local_constraint_values, lower, upper),
+            )
+
+        def run_explicit_local_polish() -> dict[str, Any] | None:
+            nonlocal evaluation_limit
+            if (
+                not request.constraints
+                or minimize is None
+                or NonlinearConstraint is None
+                or "constraints" not in minimizer_kwargs
+            ):
+                return None
+            with _GOAL_SEEK_LOCK:
+                evaluations = list(_GOAL_SEEK_JOBS[job_id].get("evaluations") or [])
+            starts = _local_polish_start_points(
+                evaluations,
+                limit=_DEFAULT_LOCAL_POLISH_STARTS,
+            )
+            if not starts:
+                return {
+                    "attempted_starts": 0,
+                    "successful_starts": 0,
+                    "new_evaluations": 0,
+                    "best": None,
+                    "message": "No evaluated points were available as local-polish starts.",
+                }
+
+            _append_goal_seek_event(
+                job_id,
+                "local_polish_started",
+                "Starting explicit SLSQP local refinement from sampled points.",
+                details={
+                    "start_count": len(starts),
+                    "selection": "best feasible points, then lowest constraint-violation points",
+                    "maxiter": minimizer_kwargs["options"].get("maxiter"),
+                    "ftol": minimizer_kwargs["options"].get("ftol"),
+                },
+            )
+
+            best: dict[str, Any] | None = None
+            attempted = 0
+            successful = 0
+            starting_cache_size = len(cache)
+            messages: list[str] = []
+            previous_evaluation_limit = evaluation_limit
+            evaluation_limit = _DEFAULT_GOAL_SEEK_TOTAL_EVALUATION_LIMIT
+            try:
+                for start in starts:
+                    if len(cache) >= _DEFAULT_GOAL_SEEK_TOTAL_EVALUATION_LIMIT:
+                        messages.append(
+                            "Stopped local polish at the backend evaluation guard."
+                        )
+                        break
+                    if _goal_seek_cancelled(job_id):
+                        raise RuntimeError("Goal-seek job was cancelled.")
+                    attempted += 1
+                    try:
+                        local_result = minimize(
+                            objective_fun,
+                            start,
+                            method="SLSQP",
+                            bounds=bounds_tuple,
+                            constraints=minimizer_kwargs["constraints"],
+                            options=minimizer_kwargs["options"],
+                        )
+                    except Exception as exc:
+                        messages.append(str(exc))
+                        _append_goal_seek_event(
+                            job_id,
+                            "local_polish_start_failed",
+                            "SLSQP local refinement failed for one start point.",
+                            details={"start": start, "error": str(exc)},
+                        )
+                        continue
+
+                    messages.append(str(getattr(local_result, "message", "")))
+                    x_candidate = getattr(local_result, "x", None)
+                    if x_candidate is None:
+                        continue
+                    values = _parse_solver_vector(x_candidate)
+                    if values is None or not _trial_point_within_bounds(values, bounds):
+                        continue
+                    try:
+                        evaluated = evaluate_vector(values)
+                    except RuntimeError as exc:
+                        messages.append(str(exc))
+                        break
+                    if _is_feasible_evaluation(evaluated):
+                        successful += 1
+                        best = _best_feasible_evaluation(best, evaluated)
+            finally:
+                evaluation_limit = previous_evaluation_limit
+
+            result = {
+                "attempted_starts": attempted,
+                "successful_starts": successful,
+                "new_evaluations": len(cache) - starting_cache_size,
+                "best": best,
+                "messages": messages[-5:],
+            }
+            details = {
+                key: value
+                for key, value in result.items()
+                if key != "best"
+            }
+            if best is not None:
+                details["best"] = _evaluation_summary(best)
+            _append_goal_seek_event(
+                job_id,
+                "local_polish_completed",
+                "Completed explicit SLSQP local refinement.",
+                details=details,
+            )
+            return result
 
         if _goal_seek_mode(request) == "parameter_threshold":
             _append_goal_seek_event(
@@ -1316,6 +1589,20 @@ def _run_goal_seek_job(
         )
 
         optimizer_candidate = None
+        shgo_recorded_evaluations = len(cache)
+        shgo_nfev = getattr(result, "nfev", None)
+        shgo_missing_local_phase = (
+            shgo_recorded_evaluations <= n + 1
+            or (isinstance(shgo_nfev, (int, float)) and shgo_nfev <= 0)
+        )
+        local_polish_result = (
+            run_explicit_local_polish() if shgo_missing_local_phase else None
+        )
+        local_polish_best = (
+            local_polish_result.get("best")
+            if isinstance(local_polish_result, dict)
+            else None
+        )
         if getattr(result, "x", None) is not None:
             evaluated_candidate = evaluate_vector(result.x)
             if _is_feasible_evaluation(evaluated_candidate):
@@ -1332,7 +1619,11 @@ def _run_goal_seek_job(
 
         with _GOAL_SEEK_LOCK:
             stored_best = _GOAL_SEEK_JOBS[job_id].get("best")
-        final_best = _best_feasible_evaluation(optimizer_candidate, stored_best)
+        final_best = _best_feasible_evaluation(
+            optimizer_candidate,
+            local_polish_best,
+            stored_best,
+        )
         if final_best is not None and not final_best.get("feasible"):
             raise RuntimeError("Internal error: final goal-seek best point is infeasible.")
 
@@ -1340,29 +1631,56 @@ def _run_goal_seek_job(
             success=bool(getattr(result, "success", False)),
             message=str(getattr(result, "message", "")),
         )
+        if (
+            isinstance(local_polish_result, dict)
+            and local_polish_result.get("attempted_starts", 0) > 0
+        ):
+            stop_reason = "local_polish_completed"
+        solver_settings = {
+            "n": n,
+            "iters": iters,
+            "sampling_method": actual_sampling_method,
+            "requested_sampling_method": request.sampling_method,
+            "local_minimizer": "SLSQP",
+            "explicit_local_polish_starts": _DEFAULT_LOCAL_POLISH_STARTS,
+            "local_minimizer_options": minimizer_kwargs["options"],
+            "global_options": _build_shgo_options(request),
+        }
+        local_minima = getattr(result, "xl", None)
+        local_minima_count = len(local_minima) if local_minima is not None else 0
+        local_evaluation_count = getattr(result, "nlfev", None)
+        optimizer_success = bool(getattr(result, "success", False)) or (
+            local_polish_best is not None
+        )
+        if optimizer_success:
+            stop_reason = "normal_completion"
+        optimizer_message = str(getattr(result, "message", ""))
+        if local_polish_best is not None and not bool(getattr(result, "success", False)):
+            optimizer_message = (
+                f"{optimizer_message} Explicit SLSQP local polish found a feasible candidate."
+            ).strip()
         _update_goal_seek_job(
             job_id,
             status="completed",
             completed_at=time.time(),
             optimizer={
                 "method": "scipy.optimize.shgo",
-                "success": bool(getattr(result, "success", False)),
-                "message": str(getattr(result, "message", "")),
+                "success": optimizer_success,
+                "message": optimizer_message,
                 "fun": deps["coerce_float"](getattr(result, "fun", None)),
                 "nfev": getattr(result, "nfev", None),
+                "nlfev": local_evaluation_count,
+                "local_minima_count": local_minima_count,
                 "stop_reason": stop_reason,
                 "recorded_evaluations": len(cache),
                 "feasible_evaluations": len(
                     [item for item in cache.values() if item.get("feasible")]
                 ),
-                "solver_settings": {
-                    "n": request.n,
-                    "iters": request.iters,
-                    "sampling_method": actual_sampling_method,
-                    "requested_sampling_method": request.sampling_method,
-                    "local_minimizer": "SLSQP",
-                    "local_minimizer_options": minimizer_kwargs["options"],
-                    "global_options": _build_shgo_options(request),
+                "solver_settings": solver_settings,
+                "local_polish": {
+                    key: value
+                    for key, value in (local_polish_result or {}).items()
+                    if key != "best"
                 },
             },
             best=final_best,
@@ -1370,23 +1688,22 @@ def _run_goal_seek_job(
         completion_details = {
             "optimizer": {
                 "method": "scipy.optimize.shgo",
-                "success": bool(getattr(result, "success", False)),
-                "message": str(getattr(result, "message", "")),
+                "success": optimizer_success,
+                "message": optimizer_message,
                 "fun": deps["coerce_float"](getattr(result, "fun", None)),
                 "nfev": getattr(result, "nfev", None),
+                "nlfev": local_evaluation_count,
+                "local_minima_count": local_minima_count,
                 "stop_reason": stop_reason,
                 "recorded_evaluations": len(cache),
                 "feasible_evaluations": len(
                     [item for item in cache.values() if item.get("feasible")]
                 ),
-                "solver_settings": {
-                    "n": request.n,
-                    "iters": request.iters,
-                    "sampling_method": actual_sampling_method,
-                    "requested_sampling_method": request.sampling_method,
-                    "local_minimizer": "SLSQP",
-                    "local_minimizer_options": minimizer_kwargs["options"],
-                    "global_options": _build_shgo_options(request),
+                "solver_settings": solver_settings,
+                "local_polish": {
+                    key: value
+                    for key, value in (local_polish_result or {}).items()
+                    if key != "best"
                 },
             }
         }

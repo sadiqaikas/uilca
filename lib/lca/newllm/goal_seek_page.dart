@@ -10,6 +10,7 @@ import '../newhome/lca_models.dart';
 import 'goal_seek_report_exporter.dart';
 import 'openlca_calculation_target_selector.dart';
 import 'pdf_download.dart';
+import 'repro_bundle_helper.dart';
 
 class GoalSeekPage extends StatefulWidget {
   final List<ProcessNode> processes;
@@ -19,6 +20,8 @@ class GoalSeekPage extends StatefulWidget {
   final Map<String, dynamic>? initialImpactMethod;
   final String? userPrompt;
   final Map<String, dynamic>? initialPayload;
+  final String? sourceModelName;
+  final String? sourceProviderLabel;
   final bool autoStart;
 
   const GoalSeekPage({
@@ -30,6 +33,8 @@ class GoalSeekPage extends StatefulWidget {
     this.initialImpactMethod,
     this.userPrompt,
     this.initialPayload,
+    this.sourceModelName,
+    this.sourceProviderLabel,
     this.autoStart = false,
   });
 
@@ -47,6 +52,10 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
     'OPENLCA_IPC_URL',
     defaultValue: 'http://localhost:8080',
   );
+  static const int _generalGoalSeekDefaultN = 256;
+  static const int _generalGoalSeekDefaultIters = 4;
+  static const int _parameterThresholdDefaultN = 32;
+  static const int _parameterThresholdDefaultIters = 1;
 
   final TextEditingController _parameterSearchCtrl = TextEditingController();
   final TextEditingController _impactSearchCtrl = TextEditingController();
@@ -60,6 +69,7 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
   bool _isStarting = false;
   bool _isExportingPdf = false;
   bool _isExportingCsv = false;
+  bool _isExportingBundle = false;
   bool _showSetupEditor = false;
   String? _impactError;
   String? _jobId;
@@ -246,6 +256,18 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
         : Map<String, dynamic>.from(decoded as Map);
   }
 
+  int _goalSeekDefaultNForMode(String mode) {
+    return mode == 'parameter_threshold'
+        ? _parameterThresholdDefaultN
+        : _generalGoalSeekDefaultN;
+  }
+
+  int _goalSeekDefaultItersForMode(String mode) {
+    return mode == 'parameter_threshold'
+        ? _parameterThresholdDefaultIters
+        : _generalGoalSeekDefaultIters;
+  }
+
   String get _goalModeLabel =>
       _goalMode == 'parameter'
           ? (_objectiveDirection == 'minimize' &&
@@ -256,6 +278,33 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
           : 'Constrained optimisation';
 
   bool get _hasGeneratedPayload => widget.initialPayload != null;
+
+  String _sourceModelName() {
+    final value = (widget.sourceModelName ?? '').toString().trim();
+    return value.isEmpty ? '' : value;
+  }
+
+  String _sourceProviderLabel() {
+    final value = (widget.sourceProviderLabel ?? '').toString().trim();
+    return value.isEmpty ? '' : value;
+  }
+
+  Map<String, dynamic> _runMetadata() {
+    final productSystem = widget.openLcaProductSystem;
+    final selectedTarget = _selectedCalculationTarget ?? widget.initialCalculationTarget;
+    return {
+      'goal_mode': _goalMode,
+      'llm_model_name': _sourceModelName(),
+      'llm_provider_label': _sourceProviderLabel(),
+      'product_system_id': (productSystem?['id'] ?? '').toString().trim(),
+      'product_system_name': (productSystem?['name'] ?? '').toString().trim(),
+      'selected_impact_method_id': _selectedImpactMethodId(),
+      'selected_impact_method_name': _selectedImpactMethodName(),
+      'selected_calculation_target': selectedTarget == null
+          ? null
+          : ReproBundleHelper.stableJsonValue(selectedTarget),
+    };
+  }
 
   String _parameterLabelFromField(String field, String? processId, double initial) {
     if (field.startsWith('parameters.global.')) {
@@ -683,8 +732,8 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
           },
       ],
       'objective': _buildObjectivePayload(),
-      'n': 256,
-      'iters': 4,
+      'n': _goalSeekDefaultNForMode(mode),
+      'iters': _goalSeekDefaultItersForMode(mode),
       'sampling_method': 'sobol',
     };
   }
@@ -720,13 +769,18 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
     } else if (objectiveType == 'indicator') {
       next['mode'] = 'constrained_optimization';
     }
+    final mode = (next['mode'] ?? 'constrained_optimization').toString().trim();
     final rawN = next['n'];
     final normalizedN = rawN is num ? rawN.toInt() : int.tryParse('$rawN');
-    next['n'] = normalizedN == null ? 256 : normalizedN.clamp(1, 512);
+    next['n'] = normalizedN == null
+        ? _goalSeekDefaultNForMode(mode)
+        : normalizedN.clamp(1, 512);
     final rawIters = next['iters'];
     final normalizedIters =
         rawIters is num ? rawIters.toInt() : int.tryParse('$rawIters');
-    next['iters'] = normalizedIters == null ? 4 : normalizedIters.clamp(1, 8);
+    next['iters'] = normalizedIters == null
+        ? _goalSeekDefaultItersForMode(mode)
+        : normalizedIters.clamp(1, 8);
     final samplingMethod = (next['sampling_method'] ?? '').toString().trim();
     next['sampling_method'] =
         samplingMethod.isEmpty ? 'sobol' : samplingMethod;
@@ -841,11 +895,14 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
     if (selectedPayload == null) return;
     final normalizedPayload = _normalizeGoalSeekPayload(selectedPayload);
     _applyPayloadToSetup(normalizedPayload);
+    _pollTimer?.cancel();
+    _pollTimer = null;
     setState(() {
       _isStarting = true;
       _job = null;
       _jobId = null;
       _activePayload = normalizedPayload;
+      _clientEvents.clear();
     });
     _appendClientEvent(
       'submit',
@@ -885,9 +942,11 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
         'Optimizer accepted the run and returned a job id.',
         details: {'job_id': jobId},
       );
-      _pollTimer?.cancel();
-      _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) => _pollJob());
-      await _pollJob();
+      _pollTimer = Timer.periodic(
+        const Duration(seconds: 2),
+        (_) => _pollJob(jobIdOverride: jobId),
+      );
+      await _pollJob(jobIdOverride: jobId);
     } catch (e) {
       _appendClientEvent(
         'submit_failed',
@@ -900,8 +959,8 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
     }
   }
 
-  Future<void> _pollJob() async {
-    final jobId = _jobId;
+  Future<void> _pollJob({String? jobIdOverride}) async {
+    final jobId = jobIdOverride ?? _jobId;
     if (jobId == null || jobId.isEmpty) return;
     try {
       final uri = Uri.parse('$_openLcaBackendBaseUrl/openlca/goal-seek/$jobId');
@@ -913,12 +972,17 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
       final decoded = jsonDecode(response.body);
       if (decoded is! Map<String, dynamic>) return;
       if (!mounted) return;
+      if (_jobId != jobId) return;
+      final decodedJobId = (decoded['job_id'] ?? '').toString();
+      if (decodedJobId.isNotEmpty && decodedJobId != jobId) return;
       setState(() => _job = decoded);
       final status = (decoded['status'] ?? '').toString();
       if (status == 'completed' || status == 'failed' || status == 'cancelled') {
         _pollTimer?.cancel();
+        _pollTimer = null;
       }
     } catch (e) {
+      if (_jobId != jobId) return;
       _appendClientEvent(
         'poll_failed',
         'Polling the optimizer job failed.',
@@ -926,6 +990,7 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
       );
       _showSnack('Goal seek polling error: $e');
       _pollTimer?.cancel();
+      _pollTimer = null;
     }
   }
 
@@ -939,7 +1004,7 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
     );
     final uri = Uri.parse('$_openLcaBackendBaseUrl/openlca/goal-seek/$jobId/cancel');
     await http.post(uri, headers: const {'Accept': 'application/json'});
-    await _pollJob();
+    await _pollJob(jobIdOverride: jobId);
   }
 
   void _showPayload() {
@@ -1066,6 +1131,73 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
     }
   }
 
+  Future<void> _exportBundle() async {
+    if (_job == null || _isExportingBundle) return;
+    setState(() => _isExportingBundle = true);
+    try {
+      final pdfBytes = await _buildPdf();
+      final csvText = _buildCsv();
+      final files = <String, Uint8List>{
+        'goal_seek_report.pdf': pdfBytes,
+        'outputs/goal_seek_results.csv': ReproBundleHelper.utf8Bytes(csvText),
+        'inputs/request_payload.json': ReproBundleHelper.jsonBytes(
+          _activePayload ?? const <String, dynamic>{},
+        ),
+        'inputs/run_metadata.json': ReproBundleHelper.jsonBytes(_runMetadata()),
+        'inputs/user_prompt.txt': ReproBundleHelper.utf8Bytes(
+          '${_exactUserPromptForExport()}\n',
+        ),
+        'outputs/job.json': ReproBundleHelper.jsonBytes(
+          _job ?? const <String, dynamic>{},
+        ),
+        'outputs/evaluations.json': ReproBundleHelper.jsonBytes(_evaluations()),
+        'outputs/best.json': ReproBundleHelper.jsonBytes(_best()),
+        'outputs/execution_events.json': ReproBundleHelper.jsonBytes(
+          _executionEvents(),
+        ),
+        'outputs/execution_events.csv': ReproBundleHelper.utf8Bytes(
+          _buildEventsCsv(),
+        ),
+      };
+      final bundleBytes = ReproBundleHelper.buildBundle(
+        schemaVersion: 'earlylca.goal-seek-bundle.v1',
+        readme: _bundleReadme(),
+        summary: {
+          'job_id': _jobId,
+          'status': (_job?['status'] ?? '').toString(),
+          'goal_mode': _goalMode,
+          'evaluation_count': _evaluations().length,
+          'has_generated_payload': _hasGeneratedPayload,
+          'llm_model_name': _sourceModelName(),
+          'llm_provider_label': _sourceProviderLabel(),
+          'product_system': widget.openLcaProductSystem,
+          'selected_calculation_target': _selectedCalculationTarget,
+        },
+        files: files,
+      );
+      await downloadFile(
+        bytes: bundleBytes,
+        filename: 'goal_seek_reproducibility_bundle.zip',
+        mimeType: 'application/zip',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Goal-seek bundle exported as goal_seek_reproducibility_bundle.zip',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Goal-seek bundle export failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isExportingBundle = false);
+    }
+  }
+
   String _csvEscape(String value) {
     final normalized = value.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
     final escaped = normalized.replaceAll('"', '""');
@@ -1148,6 +1280,36 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
     return '${lines.join('\n')}\n';
   }
 
+  String _buildEventsCsv() {
+    final rows = <List<String>>[
+      const ['timestamp', 'stage', 'message', 'source', 'details_json'],
+    ];
+    for (final event in _executionEvents()) {
+      rows.add([
+        _formatEventTime(event['timestamp']),
+        (event['stage'] ?? '').toString(),
+        (event['message'] ?? '').toString(),
+        (event['source'] ?? '').toString(),
+        event['details'] is Map
+            ? jsonEncode(ReproBundleHelper.stableJsonValue(event['details']))
+            : '',
+      ]);
+    }
+    return ReproBundleHelper.csv(rows);
+  }
+
+  String _bundleReadme() => '''
+# Goal-Seek Reproducibility Bundle
+
+This archive contains the goal-seek PDF report plus the raw payload, job output,
+evaluation table, execution events, checksums, and supporting CSV needed for
+review and rerun auditing.
+
+The archive also records the source LLM model and provider in
+`inputs/run_metadata.json`, and mirrors that provenance in the bundle manifest
+summary, when available.
+''';
+
   String _exactUserPromptForExport() {
     final candidates = <dynamic>[
       _activePayload?['prompt'],
@@ -1195,6 +1357,8 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
       ],
       productSystemName: productSystemName,
       toolName: toolName,
+      llmModelName: _sourceModelName(),
+      llmProviderLabel: _sourceProviderLabel(),
       goalModeLabel: _goalModeLabel,
       objectiveSummary: _objectiveSummary(),
       selectedImpactMethodSummary: _selectedImpactMethodSummary(),
@@ -1233,15 +1397,15 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
                 : const Icon(Icons.table_view),
           ),
           IconButton(
-            tooltip: 'Export PDF',
-            onPressed: _job == null || _isExportingPdf ? null : _exportPdf,
-            icon: _isExportingPdf
+            tooltip: 'Export bundle',
+            onPressed: _job == null || _isExportingBundle ? null : _exportBundle,
+            icon: _isExportingBundle
                 ? const SizedBox(
                     width: 18,
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : const Icon(Icons.picture_as_pdf),
+                : const Icon(Icons.folder_zip),
           ),
         ],
       ),
@@ -1566,15 +1730,15 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
                   label: const Text('CSV'),
                 ),
                 OutlinedButton.icon(
-                  onPressed: _job == null || _isExportingPdf ? null : _exportPdf,
-                  icon: _isExportingPdf
+                  onPressed: _job == null || _isExportingBundle ? null : _exportBundle,
+                  icon: _isExportingBundle
                       ? const SizedBox(
                           width: 18,
                           height: 18,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Icon(Icons.picture_as_pdf),
-                  label: const Text('PDF'),
+                      : const Icon(Icons.folder_zip),
+                  label: const Text('Bundle'),
                 ),
                 ElevatedButton.icon(
                   onPressed: running ? null : _startGoalSeek,

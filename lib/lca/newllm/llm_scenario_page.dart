@@ -1,6 +1,7 @@
 // File: lib/lca/llm_scenario_page.dart
 
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
@@ -49,7 +50,7 @@ enum _LcaRunMode {
 }
 
 enum _PostRunAction {
-  downloadPdf,
+  downloadBundle,
   seeGraphs,
 }
 
@@ -68,6 +69,27 @@ class _ModelChoice {
     required this.provider,
     required this.label,
   });
+}
+
+class _NonScenarioModelPayload {
+  final String modelName;
+  final String status;
+  final Map<String, dynamic> payload;
+
+  const _NonScenarioModelPayload({
+    required this.modelName,
+    required this.status,
+    required this.payload,
+  });
+
+  bool get isOptimization => status == 'optimization';
+  bool get isUncertaintyPropagation => status == 'uncertainty_propagation';
+
+  String get functionLabel =>
+      isOptimization ? 'goalSeekOptimization' : 'uncertaintyPropagation';
+
+  String get modeLabel =>
+      isOptimization ? 'optimization' : 'uncertainty propagation';
 }
 
 class _LLMScenarioPageState extends State<LLMScenarioPage> {
@@ -89,11 +111,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     defaultValue: 'https://api.together.xyz/v1',
   );
   static const List<String> _openWeightModels = [
-    'Qwen/Qwen3.5-397B-A17B',
-    'zai-org/GLM-5',
-    'moonshotai/Kimi-K2.5',
-    'MiniMaxAI/MiniMax-M2.5',
-    'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8',
+    'zai-org/GLM-5.1',
+    'moonshotai/Kimi-K2.7-Code',
+    'MiniMaxAI/MiniMax-M3',
+    'deepseek-ai/DeepSeek-V4-Pro',
   ];
   static const String _brightwayBackendBaseUrl = String.fromEnvironment(
     'BRIGHTWAY_BACKEND_BASE_URL',
@@ -123,6 +144,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
   List<DocumentExtractionRecord> _documentProvenance = const [];
   LlmScenarioAbstention? _abstention;
   bool _isOpenWeightMegaRun = false;
+  bool _formulaCalculatorEnabled = false;
   int _generationRunSeq = 0;
   Set<String> _selectedModels = const {};
   String _generationRouteLabel = 'GPT-5';
@@ -599,6 +621,47 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     return names.join(', ');
   }
 
+  List<_ModelChoice> _selectedModelChoicesForExport() {
+    final selected = _selectedModels.isEmpty ? {_gpt5ModelName} : _selectedModels;
+    final available = _availableModelChoices();
+    return [
+      for (final choice in available)
+        if (selected.contains(choice.model)) choice,
+    ];
+  }
+
+  Map<String, dynamic> _buildLlmNameJson() {
+    final selectedChoices = _selectedModelChoicesForExport();
+    final models = [
+      for (final choice in selectedChoices)
+        {
+          'model': choice.model,
+          'provider': choice.provider == _ModelProvider.openai
+              ? 'OpenAI'
+              : 'Together AI',
+        },
+    ];
+    return {
+      'schema_version': 'earlylca.llm-name.v1',
+      'selected_models': models,
+    };
+  }
+
+  Future<void> _downloadLlmNameJson() async {
+    final filename = 'llm_name.json';
+    final encoder = const JsonEncoder.withIndent('  ');
+    final bytes = Uint8List.fromList(utf8.encode(encoder.convert(_buildLlmNameJson())));
+    await downloadFile(
+      bytes: bytes,
+      filename: filename,
+      mimeType: 'application/json',
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('LLM metadata exported as $filename')),
+    );
+  }
+
   Future<void> _onGenerateSelectedModelsPressed() async {
     final selected = _selectedModels.toList();
     if (selected.isEmpty) return;
@@ -645,6 +708,9 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     final runId = ++_generationRunSeq;
     final runTimer = Stopwatch()..start();
     _debugLog('SEL[$runId] Run selected models pressed: ${selected.join(', ')}');
+    _debugLog(
+      'SEL[$runId] Formula calculator enabled=$_formulaCalculatorEnabled',
+    );
 
     setState(() {
       _isLoading = true;
@@ -663,6 +729,9 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
               : 'Multi-model selected run');
     });
 
+    final optimizationContext =
+        await _loadOptimizationContextForLlm('SEL[$runId]');
+
     final mergedAll = <String, dynamic>{};
     final rawAll = <String, List<Map<String, dynamic>>>{};
     final scenarioModelByName = <String, String>{};
@@ -671,17 +740,20 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     final documentProvenance = <DocumentExtractionRecord>[];
     final unsupportedModels = <String>[];
     final failedModels = <String>[];
+    final emptyModels = <String>[];
+    final nonScenarioResults = <_NonScenarioModelPayload>[];
 
     for (final modelName in selected) {
       final modelTimer = Stopwatch()..start();
       _debugLog('SEL[$runId] Starting model="$modelName"');
+      final isOpenAi = modelName == _gpt5ModelName;
       try {
-        final isOpenAi = modelName == _gpt5ModelName;
         final controller = LlmScenarioController(
           apiKey: isOpenAi ? openAiKey! : togetherKey!,
           model: modelName,
           apiBase: isOpenAi ? _defaultOpenAiBase : _defaultTogetherApiBase,
           providerLabel: isOpenAi ? 'OpenAI' : 'Together AI',
+          formulaCalculatorEnabled: _formulaCalculatorEnabled,
           log: (message) => _debugLog('SEL[$runId][$modelName] $message'),
         );
         final result = await controller.generateAndMergeScenarios(
@@ -689,13 +761,17 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           processes: widget.processes,
           flows: widget.flows,
           parameters: widget.parameters,
+          optimizationContext: optimizationContext,
           uploadedDocuments: widget.uploadedDocuments,
         );
 
         modelTimer.stop();
         _debugLog(
           'SEL[$runId] model="$modelName" finished in ${modelTimer.elapsedMilliseconds}ms '
-          'scenarios=${result.mergedScenarios.length} unsupported=${result.isUnsupported}',
+          'scenarios=${result.mergedScenarios.length} '
+          'unsupported=${result.isUnsupported} '
+          'optimization=${result.isOptimization} '
+          'uncertainty=${result.isUncertaintyPropagation}',
         );
 
         functionsUsed.addAll(result.functionsUsed);
@@ -708,8 +784,54 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
             'reason': result.abstention!.reason,
             if (result.abstention!.requiredCapability != null)
               'required_capability': result.abstention!.requiredCapability,
+            'diagnostics': result.diagnostics,
           };
           unsupportedModels.add('${_shortModelName(modelName)}: ${result.abstention!.reason}');
+          continue;
+        }
+
+        if (result.optimizationPayload != null) {
+          generationByModel[modelName] = {
+            'status': 'optimization',
+            'scenario_count': 0,
+            'diagnostics': result.diagnostics,
+          };
+          nonScenarioResults.add(
+            _NonScenarioModelPayload(
+              modelName: modelName,
+              status: 'optimization',
+              payload: result.optimizationPayload!,
+            ),
+          );
+          continue;
+        }
+
+        if (result.uncertaintyPayload != null) {
+          generationByModel[modelName] = {
+            'status': 'uncertainty_propagation',
+            'scenario_count': 0,
+            'diagnostics': result.diagnostics,
+          };
+          nonScenarioResults.add(
+            _NonScenarioModelPayload(
+              modelName: modelName,
+              status: 'uncertainty_propagation',
+              payload: result.uncertaintyPayload!,
+            ),
+          );
+          continue;
+        }
+
+        if (result.mergedScenarios.isEmpty) {
+          generationByModel[modelName] = {
+            'status': 'empty',
+            'scenario_count': 0,
+            'reason': 'Model returned no mergeable scenario deltas.',
+            'diagnostics': result.diagnostics,
+          };
+          emptyModels.add(
+            '${_shortModelName(modelName)}: Model returned no mergeable scenario deltas.',
+          );
           continue;
         }
 
@@ -728,16 +850,24 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
         generationByModel[modelName] = {
           'status': 'success',
           'scenario_count': result.mergedScenarios.length,
+          'diagnostics': result.diagnostics,
         };
-      } catch (e) {
+      } catch (e, st) {
         modelTimer.stop();
         _debugLog(
           'SEL[$runId] model="$modelName" failed after ${modelTimer.elapsedMilliseconds}ms: $e',
         );
+        _debugLog('SEL[$runId] model="$modelName" StackTrace:\n$st');
         generationByModel[modelName] = {
           'status': 'error',
           'scenario_count': 0,
           'error': e.toString(),
+          'diagnostics': _buildModelErrorDiagnostics(
+            modelName: modelName,
+            providerLabel: isOpenAi ? 'OpenAI' : 'Together AI',
+            error: e,
+            stackTrace: st,
+          ),
         };
         failedModels.add('${_shortModelName(modelName)}: $e');
       }
@@ -746,13 +876,40 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     if (!mounted) return;
 
     if (mergedAll.isEmpty) {
+      final handledNonScenario = await _maybeOpenSingleNonScenarioResult(
+        logPrefix: 'SEL[$runId]',
+        results: nonScenarioResults,
+        generationByModel: generationByModel,
+        functionsUsed: functionsUsed,
+        documentProvenance: documentProvenance,
+        isOpenWeightMegaRun: selected.length > 1 || wantsTogether,
+        routeLabel: selected.length == 1 && wantsOpenAi && !wantsTogether
+            ? 'GPT-5'
+            : (wantsTogether && !wantsOpenAi
+                ? 'Together AI selected models'
+                : 'Multi-model selected run'),
+      );
+      if (handledNonScenario) {
+        return;
+      }
+
       final summaryParts = <String>[];
+      if (nonScenarioResults.isNotEmpty) {
+        summaryParts.add(
+          'Supported non-scenario outputs: ${_summarizeNonScenarioResults(nonScenarioResults)}.',
+        );
+      }
+      if (emptyModels.isNotEmpty) {
+        summaryParts.add('Empty: ${emptyModels.join(' | ')}');
+      }
       if (unsupportedModels.isNotEmpty) {
         summaryParts.add('Unsupported: ${unsupportedModels.join(' | ')}');
       }
       if (failedModels.isNotEmpty) {
         summaryParts.add('Failed: ${failedModels.join(' | ')}');
       }
+      final sortedFunctions = functionsUsed.toList()
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
       final summary = summaryParts.isEmpty
           ? 'No scenarios were produced.'
           : summaryParts.join(' ');
@@ -762,13 +919,22 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
         _rawDeltasByScenario = null;
         _scenarioModelByName = const {};
         _generationByModel = generationByModel;
-        _functionsUsed = const [];
-        _documentProvenance = const [];
-        _abstention = LlmScenarioAbstention(
-          reason: 'No selected model produced scenarios. $summary',
-          requiredCapability:
-              'At least one selected model must return a supported scenario delta response.',
-        );
+        _functionsUsed = sortedFunctions;
+        _documentProvenance = documentProvenance;
+        _abstention = nonScenarioResults.length > 1
+            ? LlmScenarioAbstention(
+                status: 'ambiguous_result',
+                reason:
+                    'Selected models returned multiple supported non-scenario outputs, '
+                    'so the run cannot auto-execute a single payload. $summary',
+                requiredCapability:
+                    'Exactly one supported optimization/uncertainty payload, or at least one supported scenario delta response.',
+              )
+            : LlmScenarioAbstention(
+                reason: 'No selected model produced scenarios. $summary',
+                requiredCapability:
+                    'At least one selected model must return a supported scenario delta response.',
+              );
       });
       return;
     }
@@ -803,6 +969,9 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     final runId = ++_generationRunSeq;
     final runTimer = Stopwatch()..start();
     _debugLog('GEN[$runId] Generate GPT-5 scenarios pressed');
+    _debugLog(
+      'GEN[$runId] Formula calculator enabled=$_formulaCalculatorEnabled',
+    );
 
     final apiKey = await _ensureOpenAiApiKey();
     if (apiKey == null || apiKey.trim().isEmpty) {
@@ -852,6 +1021,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
         model: _gpt5ModelName,
         apiBase: _defaultOpenAiBase,
         providerLabel: 'OpenAI',
+        formulaCalculatorEnabled: _formulaCalculatorEnabled,
         log: (message) => _debugLog('GEN[$runId] $message'),
       );
       _debugLog('GEN[$runId] Calling generateAndMergeScenarios');
@@ -884,6 +1054,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
               'reason': result.abstention!.reason,
               if (result.abstention!.requiredCapability != null)
                 'required_capability': result.abstention!.requiredCapability,
+              'diagnostics': result.diagnostics,
             },
           };
           _functionsUsed = result.functionsUsed;
@@ -914,6 +1085,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
             _gpt5ModelName: {
               'status': 'optimization',
               'scenario_count': 0,
+              'diagnostics': result.diagnostics,
             },
           };
           _functionsUsed = [...result.functionsUsed, 'goalSeekOptimization'];
@@ -922,7 +1094,11 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           _isOpenWeightMegaRun = false;
           _generationRouteLabel = 'GPT-5';
         });
-        await _openGeneratedGoalSeek(result.optimizationPayload!);
+        await _openGeneratedGoalSeek(
+          result.optimizationPayload!,
+          sourceModelName: _gpt5ModelName,
+          sourceProviderLabel: 'OpenAI',
+        );
         return;
       }
 
@@ -937,6 +1113,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
             _gpt5ModelName: {
               'status': 'uncertainty_propagation',
               'scenario_count': 0,
+              'diagnostics': result.diagnostics,
             },
           };
           _functionsUsed = [
@@ -965,6 +1142,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           _gpt5ModelName: {
             'status': 'success',
             'scenario_count': result.mergedScenarios.length,
+            'diagnostics': result.diagnostics,
           },
         };
         _functionsUsed = result.functionsUsed;
@@ -999,6 +1177,12 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
             'status': 'error',
             'scenario_count': 0,
             'error': e.toString(),
+            'diagnostics': _buildModelErrorDiagnostics(
+              modelName: _gpt5ModelName,
+              providerLabel: 'OpenAI',
+              error: e,
+              stackTrace: st,
+            ),
           },
         };
       });
@@ -1023,6 +1207,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     return trimmed.substring(slash + 1);
   }
 
+  String _providerLabelForModel(String modelName) {
+    return modelName.trim() == _gpt5ModelName ? 'OpenAI' : 'Together AI';
+  }
+
   String _toScopedScenarioName(String model, String scenarioName) {
     final cleanedScenario =
         scenarioName.trim().isEmpty ? 'Scenario' : scenarioName.trim();
@@ -1040,10 +1228,82 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     return candidate;
   }
 
+  String _summarizeNonScenarioResults(
+    List<_NonScenarioModelPayload> results,
+  ) {
+    final optimizationModels = results
+        .where((result) => result.isOptimization)
+        .map((result) => _shortModelName(result.modelName))
+        .toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final uncertaintyModels = results
+        .where((result) => result.isUncertaintyPropagation)
+        .map((result) => _shortModelName(result.modelName))
+        .toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+    final parts = <String>[];
+    if (optimizationModels.isNotEmpty) {
+      parts.add('optimization: ${optimizationModels.join(', ')}');
+    }
+    if (uncertaintyModels.isNotEmpty) {
+      parts.add('uncertainty: ${uncertaintyModels.join(', ')}');
+    }
+    return parts.join(' | ');
+  }
+
+  Future<bool> _maybeOpenSingleNonScenarioResult({
+    required String logPrefix,
+    required List<_NonScenarioModelPayload> results,
+    required Map<String, Map<String, dynamic>> generationByModel,
+    required Set<String> functionsUsed,
+    required List<DocumentExtractionRecord> documentProvenance,
+    required bool isOpenWeightMegaRun,
+    required String routeLabel,
+  }) async {
+    if (results.length != 1) return false;
+    final result = results.single;
+    final sortedFunctions = {...functionsUsed, result.functionLabel}.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+    _debugLog(
+      '$logPrefix Routing supported ${result.modeLabel} payload from '
+      'model="${result.modelName}"',
+    );
+
+    if (!mounted) return true;
+    setState(() {
+      _isLoading = false;
+      _mergedScenarios = null;
+      _rawDeltasByScenario = null;
+      _scenarioModelByName = const {};
+      _generationByModel = generationByModel;
+      _functionsUsed = sortedFunctions;
+      _documentProvenance = documentProvenance;
+      _abstention = null;
+      _isOpenWeightMegaRun = isOpenWeightMegaRun;
+      _generationRouteLabel = routeLabel;
+    });
+
+    if (result.isOptimization) {
+      await _openGeneratedGoalSeek(
+        result.payload,
+        sourceModelName: result.modelName,
+        sourceProviderLabel: _providerLabelForModel(result.modelName),
+      );
+    } else {
+      await _openGeneratedUncertaintyPropagation(result.payload);
+    }
+    return true;
+  }
+
   Future<void> _onGenerateOpenWeightsPressed() async {
     final runId = ++_generationRunSeq;
     final runTimer = Stopwatch()..start();
     _debugLog('OW[$runId] Run open-weight models pressed');
+    _debugLog(
+      'OW[$runId] Formula calculator enabled=$_formulaCalculatorEnabled',
+    );
 
     final apiKey = await _ensureTogetherApiKey();
     if (apiKey == null || apiKey.trim().isEmpty) {
@@ -1087,6 +1347,9 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       _generationRouteLabel = 'Together AI open-weight mega run';
     });
 
+    final optimizationContext =
+        await _loadOptimizationContextForLlm('OW[$runId]');
+
     final mergedAll = <String, dynamic>{};
     final rawAll = <String, List<Map<String, dynamic>>>{};
     final scenarioModelByName = <String, String>{};
@@ -1095,6 +1358,8 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     final documentProvenance = <DocumentExtractionRecord>[];
     final unsupportedModels = <String>[];
     final failedModels = <String>[];
+    final emptyModels = <String>[];
+    final nonScenarioResults = <_NonScenarioModelPayload>[];
 
     for (final modelName in _openWeightModels) {
       final modelTimer = Stopwatch()..start();
@@ -1105,6 +1370,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           model: modelName,
           apiBase: _defaultTogetherApiBase,
           providerLabel: 'Together AI',
+          formulaCalculatorEnabled: _formulaCalculatorEnabled,
           log: (message) => _debugLog('OW[$runId][$modelName] $message'),
         );
         final result = await controller.generateAndMergeScenarios(
@@ -1112,13 +1378,17 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           processes: widget.processes,
           flows: widget.flows,
           parameters: widget.parameters,
+          optimizationContext: optimizationContext,
           uploadedDocuments: widget.uploadedDocuments,
         );
 
         modelTimer.stop();
         _debugLog(
           'OW[$runId] model="$modelName" finished in ${modelTimer.elapsedMilliseconds}ms '
-          'scenarios=${result.mergedScenarios.length} unsupported=${result.isUnsupported}',
+          'scenarios=${result.mergedScenarios.length} '
+          'unsupported=${result.isUnsupported} '
+          'optimization=${result.isOptimization} '
+          'uncertainty=${result.isUncertaintyPropagation}',
         );
 
         functionsUsed.addAll(result.functionsUsed);
@@ -1131,9 +1401,55 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
             'reason': result.abstention!.reason,
             if (result.abstention!.requiredCapability != null)
               'required_capability': result.abstention!.requiredCapability,
+            'diagnostics': result.diagnostics,
           };
           unsupportedModels
               .add('${_shortModelName(modelName)}: ${result.abstention!.reason}');
+          continue;
+        }
+
+        if (result.optimizationPayload != null) {
+          generationByModel[modelName] = {
+            'status': 'optimization',
+            'scenario_count': 0,
+            'diagnostics': result.diagnostics,
+          };
+          nonScenarioResults.add(
+            _NonScenarioModelPayload(
+              modelName: modelName,
+              status: 'optimization',
+              payload: result.optimizationPayload!,
+            ),
+          );
+          continue;
+        }
+
+        if (result.uncertaintyPayload != null) {
+          generationByModel[modelName] = {
+            'status': 'uncertainty_propagation',
+            'scenario_count': 0,
+            'diagnostics': result.diagnostics,
+          };
+          nonScenarioResults.add(
+            _NonScenarioModelPayload(
+              modelName: modelName,
+              status: 'uncertainty_propagation',
+              payload: result.uncertaintyPayload!,
+            ),
+          );
+          continue;
+        }
+
+        if (result.mergedScenarios.isEmpty) {
+          generationByModel[modelName] = {
+            'status': 'empty',
+            'scenario_count': 0,
+            'reason': 'Model returned no mergeable scenario deltas.',
+            'diagnostics': result.diagnostics,
+          };
+          emptyModels.add(
+            '${_shortModelName(modelName)}: Model returned no mergeable scenario deltas.',
+          );
           continue;
         }
 
@@ -1150,6 +1466,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
         generationByModel[modelName] = {
           'status': 'success',
           'scenario_count': result.mergedScenarios.length,
+          'diagnostics': result.diagnostics,
         };
       } catch (e, st) {
         modelTimer.stop();
@@ -1161,6 +1478,12 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           'status': 'error',
           'scenario_count': 0,
           'error': e.toString(),
+          'diagnostics': _buildModelErrorDiagnostics(
+            modelName: modelName,
+            providerLabel: 'Together AI',
+            error: e,
+            stackTrace: st,
+          ),
         };
         failedModels.add('${_shortModelName(modelName)}: $e');
       }
@@ -1169,13 +1492,36 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     if (!mounted) return;
 
     if (mergedAll.isEmpty) {
+      final handledNonScenario = await _maybeOpenSingleNonScenarioResult(
+        logPrefix: 'OW[$runId]',
+        results: nonScenarioResults,
+        generationByModel: generationByModel,
+        functionsUsed: functionsUsed,
+        documentProvenance: documentProvenance,
+        isOpenWeightMegaRun: true,
+        routeLabel: 'Together AI open-weight mega run',
+      );
+      if (handledNonScenario) {
+        return;
+      }
+
       final summaryParts = <String>[];
+      if (nonScenarioResults.isNotEmpty) {
+        summaryParts.add(
+          'Supported non-scenario outputs: ${_summarizeNonScenarioResults(nonScenarioResults)}.',
+        );
+      }
+      if (emptyModels.isNotEmpty) {
+        summaryParts.add('Empty: ${emptyModels.join(' | ')}');
+      }
       if (unsupportedModels.isNotEmpty) {
         summaryParts.add('Unsupported: ${unsupportedModels.join(' | ')}');
       }
       if (failedModels.isNotEmpty) {
         summaryParts.add('Failed: ${failedModels.join(' | ')}');
       }
+      final sortedFunctions = functionsUsed.toList()
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
       final summary = summaryParts.isEmpty
           ? 'No scenarios were produced.'
           : summaryParts.join(' ');
@@ -1186,20 +1532,31 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
         _rawDeltasByScenario = null;
         _scenarioModelByName = const {};
         _generationByModel = generationByModel;
-        _functionsUsed = const [];
-        _documentProvenance = const [];
-        _isOpenWeightMegaRun = false;
-        _abstention = LlmScenarioAbstention(
-          reason: 'No open-weight model produced scenarios. $summary',
-          requiredCapability:
-              'At least one Together-hosted model must return a supported scenario delta response.',
-        );
+        _functionsUsed = sortedFunctions;
+        _documentProvenance = documentProvenance;
+        _isOpenWeightMegaRun = true;
+        _abstention = nonScenarioResults.length > 1
+            ? LlmScenarioAbstention(
+                status: 'ambiguous_result',
+                reason:
+                    'Open-weight models returned multiple supported non-scenario outputs, '
+                    'so the run cannot auto-execute a single payload. $summary',
+                requiredCapability:
+                    'Exactly one supported optimization/uncertainty payload, or at least one supported scenario delta response.',
+              )
+            : LlmScenarioAbstention(
+                reason: 'No open-weight model produced scenarios. $summary',
+                requiredCapability:
+                    'At least one Together-hosted model must return a supported scenario delta response.',
+              );
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Open-weight run completed with no usable scenarios. Check logs for details.',
+            nonScenarioResults.length > 1
+                ? 'Open-weight run returned multiple valid non-scenario outputs. Run one model at a time to execute one.'
+                : 'Open-weight run completed with no usable scenarios. Check logs for details.',
           ),
           duration: Duration(seconds: 8),
         ),
@@ -1593,7 +1950,11 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     throw Exception('OpenLCA backend response did not contain "results".');
   }
 
-  Future<void> _openGeneratedGoalSeek(Map<String, dynamic> payload) async {
+  Future<void> _openGeneratedGoalSeek(
+    Map<String, dynamic> payload, {
+    required String sourceModelName,
+    required String sourceProviderLabel,
+  }) async {
     if (!mounted) return;
     final payloadWithPrompt = Map<String, dynamic>.from(payload);
     final rawPrompt = widget.prompt;
@@ -1627,6 +1988,8 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           initialImpactMethod: _selectedOpenLcaImpactMethod,
           userPrompt: widget.prompt,
           initialPayload: payloadWithPrompt,
+          sourceModelName: sourceModelName,
+          sourceProviderLabel: sourceProviderLabel,
           autoStart: true,
         ),
       ),
@@ -1823,9 +2186,9 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
                 const SizedBox(height: 16),
                 ElevatedButton.icon(
                   onPressed: () => Navigator.of(dialogContext)
-                      .pop(_PostRunAction.downloadPdf),
-                  icon: const Icon(Icons.picture_as_pdf),
-                  label: const Text('Download PDF'),
+                      .pop(_PostRunAction.downloadBundle),
+                  icon: const Icon(Icons.folder_zip),
+                  label: const Text('Download reproducibility bundle'),
                   style: ElevatedButton.styleFrom(
                     minimumSize: const Size.fromHeight(56),
                   ),
@@ -1854,11 +2217,40 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     );
   }
 
-  Future<void> _downloadResultsPdf({
+  Map<String, dynamic> _buildBaseModelExport() {
+    return {
+      'processes': widget.processes.map((process) => process.toJson()).toList(),
+      'flows': widget.flows,
+      if (widget.parameters != null) 'parameters': widget.parameters!.toJson(),
+    };
+  }
+
+  Map<String, dynamic> _buildModelErrorDiagnostics({
+    required String modelName,
+    required String providerLabel,
+    required Object error,
+    StackTrace? stackTrace,
+  }) {
+    return {
+      'provider': providerLabel,
+      'model': modelName,
+      'failure_type': 'exception',
+      'error': error.toString(),
+      if (stackTrace != null) 'stack_trace': stackTrace.toString(),
+    };
+  }
+
+  Future<String> _downloadResultsBundle({
     required Map<String, dynamic> results,
     String? productSystemName,
     String? impactMethodName,
+    String? reportFilename,
+    String? zipFilename,
   }) async {
+    final reportName = reportFilename ??
+        (_isOpenWeightMegaRun
+            ? 'lca_results_multi_model_report.pdf'
+            : 'lca_results_report.pdf');
     final pdfBytes = await ReportExporter.buildPdf(
       prompt: widget.prompt,
       functionsUsed: _functionsUsed,
@@ -1872,10 +2264,54 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       generationByModel: _generationByModel,
       documentProvenance: _documentProvenance,
     );
-    await downloadPdf(
-      bytes: pdfBytes,
-      filename: _isOpenWeightMegaRun ? 'lca_results_multi_model_report.pdf' : 'lca_results_report.pdf',
+    final zipBytes = await ReportExporter.buildReproducibilityBundle(
+      reportPdfBytes: pdfBytes,
+      reportPdfFilename: reportName,
+      prompt: widget.prompt,
+      functionsUsed: _functionsUsed,
+      rawDeltasByScenario: _rawDeltasByScenario ?? const {},
+      mergedScenarios: _mergedScenarios ?? const <String, dynamic>{},
+      baseModel: _buildBaseModelExport(),
+      lcaResults: results,
+      scenarioModelByName: _scenarioModelByName,
+      generationRouteLabel: _generationRouteLabel,
+      generationByModel: _generationByModel,
+      documentProvenance: _documentProvenance,
+      productSystemName: productSystemName,
+      impactMethodName: impactMethodName,
+      productSystem: _selectedOpenLcaProductSystem,
+      impactMethod: _selectedOpenLcaImpactMethod,
     );
+    final zipName = zipFilename ??
+        (_isOpenWeightMegaRun
+            ? 'lca_results_multi_model_reproducibility_bundle.zip'
+            : 'lca_results_reproducibility_bundle.zip');
+    await downloadFile(
+      bytes: zipBytes,
+      filename: zipName,
+      mimeType: 'application/zip',
+    );
+    return zipName;
+  }
+
+  Future<void> _downloadGenerationFailureBundle() async {
+    if (_generationByModel.isEmpty && _abstention == null) return;
+    try {
+      final exportedName = await _downloadResultsBundle(
+        results: const <String, dynamic>{},
+        reportFilename: 'llm_generation_failure_report.pdf',
+        zipFilename: 'llm_generation_failure_reproducibility_bundle.zip',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failure report exported as $exportedName')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failure report export failed: $e')),
+      );
+    }
   }
 
   Future<void> _handlePostRunActions({
@@ -1888,9 +2324,9 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     );
     if (!mounted || action == null) return;
 
-    if (action == _PostRunAction.downloadPdf) {
+    if (action == _PostRunAction.downloadBundle) {
       try {
-        await _downloadResultsPdf(
+        final exportedName = await _downloadResultsBundle(
           results: results,
           productSystemName:
               productSystemName.trim().isEmpty ? null : productSystemName,
@@ -1898,18 +2334,15 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
               impactMethodName.trim().isEmpty ? null : impactMethodName,
         );
         if (!mounted) return;
-        final exportedName = _isOpenWeightMegaRun
-            ? 'lca_results_multi_model_report.pdf'
-            : 'lca_results_report.pdf';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('PDF exported as $exportedName'),
+            content: Text('Reproducibility bundle exported as $exportedName'),
           ),
         );
       } catch (e) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('PDF export failed: $e')),
+          SnackBar(content: Text('Bundle export failed: $e')),
         );
       }
       return;
@@ -1930,6 +2363,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           generationRouteLabel: _generationRouteLabel,
           generationByModel: _generationByModel,
           documentProvenance: _documentProvenance,
+          baseModel: _buildBaseModelExport(),
         ),
       ),
     );
@@ -2278,6 +2712,24 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
                               fontSize: 13, fontStyle: FontStyle.italic),
                         ),
                         const SizedBox(height: 12),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 520),
+                          child: SwitchListTile(
+                            value: _formulaCalculatorEnabled,
+                            onChanged: (value) {
+                              setState(() {
+                                _formulaCalculatorEnabled = value;
+                              });
+                            },
+                            title: const Text('Formula calculator condition'),
+                            subtitle: Text(
+                              _formulaCalculatorEnabled
+                                  ? 'Uses the calculator prompt and formulaCalculator tool.'
+                                  : 'Uses the no-calculator prompt and no formulaCalculator tool.',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
                         Wrap(
                           spacing: 10,
                           runSpacing: 10,
@@ -2292,6 +2744,11 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
                               onPressed: _selectModelsDialog,
                               child: const Text('Select models'),
                             ),
+                            OutlinedButton.icon(
+                              onPressed: _downloadLlmNameJson,
+                              icon: const Icon(Icons.download),
+                              label: const Text('Download llm_name.json'),
+                            ),
                             OutlinedButton(
                               onPressed: _openManualGoalSeek,
                               child: const Text('Manual Optimizer'),
@@ -2304,7 +2761,13 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
                         ),
                         if (abstention != null) ...[
                           const SizedBox(height: 14),
-                          _UnsupportedResultCard(abstention: abstention),
+                          _UnsupportedResultCard(
+                            abstention: abstention,
+                            onDownloadReport:
+                                _generationByModel.isEmpty
+                                    ? null
+                                    : _downloadGenerationFailureBundle,
+                          ),
                         ],
                       ],
                     ),
@@ -2404,6 +2867,11 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
                               label: const Text('Select models'),
                             ),
                             OutlinedButton.icon(
+                              onPressed: _downloadLlmNameJson,
+                              icon: const Icon(Icons.download),
+                              label: const Text('Download llm_name.json'),
+                            ),
+                            OutlinedButton.icon(
                               onPressed: _openManualGoalSeek,
                               icon: const Icon(Icons.tune),
                               label: const Text('Manual Optimizer'),
@@ -2480,12 +2948,23 @@ class _SummaryTile extends StatelessWidget {
 
 class _UnsupportedResultCard extends StatelessWidget {
   final LlmScenarioAbstention abstention;
+  final VoidCallback? onDownloadReport;
 
-  const _UnsupportedResultCard({required this.abstention});
+  const _UnsupportedResultCard({
+    required this.abstention,
+    this.onDownloadReport,
+  });
 
   @override
   Widget build(BuildContext context) {
     final requiredCapability = abstention.requiredCapability?.trim() ?? '';
+    final status = abstention.status.trim().toLowerCase();
+    var title = 'Request unsupported';
+    if (status == 'ambiguous_result') {
+      title = 'Run requires selection';
+    } else if (status == 'no_supported_results') {
+      title = 'No supported result';
+    }
     return Card(
       color: const Color(0xFFFFF3CD),
       child: Padding(
@@ -2493,8 +2972,8 @@ class _UnsupportedResultCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Request unsupported',
+            Text(
+              title,
               style: TextStyle(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 6),
@@ -2502,6 +2981,14 @@ class _UnsupportedResultCard extends StatelessWidget {
             if (requiredCapability.isNotEmpty) ...[
               const SizedBox(height: 4),
               Text('Required capability: $requiredCapability'),
+            ],
+            if (onDownloadReport != null) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: onDownloadReport,
+                icon: const Icon(Icons.folder_zip),
+                label: const Text('Download failure report'),
+              ),
             ],
           ],
         ),

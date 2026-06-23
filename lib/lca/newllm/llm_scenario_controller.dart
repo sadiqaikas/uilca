@@ -22,6 +22,7 @@ class LlmScenarioResult {
   final Map<String, dynamic>? uncertaintyPayload;
   final List<String> functionsUsed;
   final List<DocumentExtractionRecord> documentProvenance;
+  final Map<String, dynamic> diagnostics;
   final LlmScenarioAbstention? abstention;
 
   bool get isUnsupported => abstention != null;
@@ -35,6 +36,7 @@ class LlmScenarioResult {
     this.uncertaintyPayload,
     required this.functionsUsed,
     this.documentProvenance = const [],
+    this.diagnostics = const <String, dynamic>{},
     this.abstention,
   });
 }
@@ -70,14 +72,14 @@ class LlmScenarioController {
   static const int _maxToolCallsPerTurn = 4;
   static const int _maxIndicatorSearchCallsPerTurn = 1;
   static const int _maxDocumentToolCallsPerTurn = 1;
+  static const int _maxDocumentMatchesPerQueryForFollowup = 3;
+  static const int _maxDocumentRowsPerMatchForFollowup = 12;
+  static const int _maxDocumentFallbackTextMatchesForFollowup = 3;
+  static const int _maxDocumentValueCharsForFollowup = 180;
   static const String _defaultApiKey = String.fromEnvironment(
     'OPENAI_API_KEY',
     defaultValue: '',
   );
-  static final Set<String> _allowedToolNames = llmFunctions
-      .map((f) => (f['name'] ?? '').toString().trim())
-      .where((name) => name.isNotEmpty)
-      .toSet();
   static final RegExp _structuralKeywordPattern = RegExp(
     r'"(?:processes|flows|inputs|outputs|emissions|biosphere|biosphere_flows|exchanges|exchange|datasets?|background_dataset|background_datasets|technosphere|flow_id|add_process|remove_process|replace_process)"',
     caseSensitive: false,
@@ -87,6 +89,7 @@ class LlmScenarioController {
   final String model;
   final String apiBase;
   final String providerLabel;
+  final bool formulaCalculatorEnabled;
   final DocumentParameterisationService documentService;
 
   /// Optional logger. If null, prints are used.
@@ -97,6 +100,7 @@ class LlmScenarioController {
     this.model = 'gpt-5', // default to GPT-5
     this.apiBase = 'https://api.openai.com/v1',
     this.providerLabel = 'OpenAI',
+    this.formulaCalculatorEnabled = false,
     this.documentService = const DocumentParameterisationService(),
     this.log,
   });
@@ -174,6 +178,26 @@ class LlmScenarioController {
         msg.contains('network');
   }
 
+  bool _shouldRetryHttpResponse(http.Response response, int attempt) {
+    if (attempt >= 2) return false;
+    if (response.statusCode == 429) return true;
+    return response.statusCode == 502 ||
+        response.statusCode == 503 ||
+        response.statusCode == 504;
+  }
+
+  Duration _retryDelayForResponse(http.Response response) {
+    final retryAfter = response.headers['retry-after']?.trim() ?? '';
+    final seconds = int.tryParse(retryAfter);
+    if (seconds != null && seconds > 0 && seconds <= 10) {
+      return Duration(seconds: seconds);
+    }
+    if (response.statusCode == 429) {
+      return const Duration(milliseconds: 1200);
+    }
+    return const Duration(milliseconds: 600);
+  }
+
   String _webFailedToFetchHint(Uri uri, http.ClientException error) {
     if (!kIsWeb || !error.message.toLowerCase().contains('failed to fetch')) {
       return '';
@@ -191,6 +215,36 @@ class LlmScenarioController {
         msg.contains('invalid') ||
         msg.contains('unknown') ||
         msg.contains('unrecognized');
+  }
+
+  String _finalJsonOnlyReminder({bool formulaResultsAvailable = false}) {
+    final reminder = 'Return only the final JSON object in one supported schema. '
+        'Do not repeat tool output, extracted tables, document metadata, or explanations. '
+        'Convert the extracted values into final scenario, optimization, uncertainty, or structured unsupported JSON. '
+        'After tool use, copy only change entries produced by the tool; do not add extra fields or parameters. '
+        'Every change.new_value must be a numeric literal; omit any change whose value is unknown or null. '
+        'Keep scenario names short and do not copy process or dataset names into scenario names.';
+    if (!formulaResultsAvailable) return reminder;
+    return '$reminder '
+        'Because formulaCalculator was used, any formula value in a scenario name must be copied from the matching formulaCalculator result.id and numeric outputs exactly; do not recalculate, reorder, regroup, or assign one result to a different candidate. If the matching calculator result is unclear, omit the formula value from the scenario name.';
+  }
+
+  String _formulaCalculatorFollowupReminder(
+    _OptimizationToolMemory toolMemory,
+  ) {
+    final candidateCount = toolMemory.simplexChangeListCount;
+    final expectedIds = candidateCount == null
+        ? 'every candidate_summaries[].id'
+        : List.generate(candidateCount, (i) => 'candidate_${i + 1}').join(', ');
+    final countSentence = candidateCount == null
+        ? 'Use one calculation per candidate_summaries item.'
+        : 'The calculations array must contain exactly $candidateCount items, with ids: $expectedIds.';
+    return 'If supported formula calculations are needed from the simplexLatticeDesign output, call formulaCalculator once with a batched calculations list. '
+        '$countSentence '
+        'Each calculation id is required and must equal the matching candidate_summaries[].id. '
+        'Formula arguments derived from the lattice must come from that same candidate_summaries[].parameter_values object. '
+        'Do not group candidates in a way that loses candidate identity. '
+        'Otherwise output the final JSON object only. Final scenarios must use only change entries from the matching changeLists entry; do not add extra parameters or null values.';
   }
 
   /// Builds the model for local merging (includes emissions and parameters)
@@ -298,9 +352,34 @@ class LlmScenarioController {
         ),
     });
 
-    const systemPrompt =
-        llmSystemPromptParametersOnly; // from llm_system_prompt.dart
-    final functions = llmFunctions; // defined alongside prompt
+    final systemPrompt = llmSystemPromptForVariant(
+      formulaCalculatorEnabled: formulaCalculatorEnabled,
+    );
+    final functions = llmFunctionsForVariant(
+      formulaCalculatorEnabled: formulaCalculatorEnabled,
+    );
+    final firstCallJsonOnly = functions.isEmpty;
+    final diagnostics = <String, dynamic>{
+      'provider': providerLabel,
+      'model': model,
+      'api_base': apiBase,
+      'controller_revision': _controllerRevision,
+      'system_prompt_variant': llmSystemPromptVariantName(
+        formulaCalculatorEnabled: formulaCalculatorEnabled,
+      ),
+      'formula_calculator_enabled': formulaCalculatorEnabled,
+      'request': {
+        'system_prompt_bytes': utf8.encode(systemPrompt).length,
+        'user_payload_bytes': utf8.encode(userPayload).length,
+        'first_call_json_response_format_requested': firstCallJsonOnly,
+        'final_json_response_format_requested': true,
+        'tool_choice': functions.isEmpty ? 'none' : 'auto',
+        'tools_offered': functions
+            .map((f) => (f['name'] ?? '').toString())
+            .where((name) => name.trim().isNotEmpty)
+            .toList(),
+      },
+    };
 
     // Step 1: initial call
     _log('[LCA] First $providerLabel call. model=$model');
@@ -308,9 +387,10 @@ class LlmScenarioController {
       systemPrompt: systemPrompt,
       userPayload: userPayload,
       functions: functions,
-      jsonOnly: true,
+      jsonOnly: firstCallJsonOnly,
       callLabel: 'first_call',
     );
+    diagnostics['first_response'] = _chatResponseDiagnostics(firstResp);
     _log('[LCA] First call returned. Parsing for tools or direct JSON');
 
     // Parse for tool/function calls or direct scenarios
@@ -322,6 +402,8 @@ class LlmScenarioController {
       prompt,
       optimizationContext ?? const <String, dynamic>{},
       uploadedDocuments,
+      diagnostics,
+      functions,
     );
     _log(
         '[LCA] Parsed assistant output. functionsUsed=${parsed.functionsUsed.join(', ')}');
@@ -340,6 +422,7 @@ class LlmScenarioController {
         uncertaintyPayload: null,
         functionsUsed: parsed.functionsUsed,
         documentProvenance: parsed.documentProvenance,
+        diagnostics: diagnostics,
         abstention: abstention,
       );
     }
@@ -353,6 +436,7 @@ class LlmScenarioController {
         uncertaintyPayload: null,
         functionsUsed: parsed.functionsUsed,
         documentProvenance: parsed.documentProvenance,
+        diagnostics: diagnostics,
         abstention: null,
       );
     }
@@ -366,6 +450,7 @@ class LlmScenarioController {
         uncertaintyPayload: parsed.uncertaintyPayload,
         functionsUsed: parsed.functionsUsed,
         documentProvenance: parsed.documentProvenance,
+        diagnostics: diagnostics,
         abstention: null,
       );
     }
@@ -384,6 +469,7 @@ class LlmScenarioController {
       uncertaintyPayload: null,
       functionsUsed: parsed.functionsUsed,
       documentProvenance: parsed.documentProvenance,
+      diagnostics: diagnostics,
       abstention: null,
     );
   }
@@ -426,6 +512,7 @@ class LlmScenarioController {
       };
     }
 
+    final isGptModel = model.toLowerCase().startsWith('gpt-');
     final body = <String, dynamic>{
       'model': model,
       'messages': messagesOverride ??
@@ -436,6 +523,10 @@ class LlmScenarioController {
       if (tools != null) 'tools': tools,
       if (tools != null) 'tool_choice': toolChoice,
       if (jsonOnly) 'response_format': {'type': 'json_object'},
+      if (isGptModel)
+        'max_completion_tokens': 8192
+      else
+        'max_tokens': 4096,
     };
 
     final uri = _resolveChatCompletionsUri();
@@ -475,6 +566,17 @@ class LlmScenarioController {
           '[LCA] $providerLabel response received. '
           'callLabel=$callLabel attempt=$attempt elapsedMs=${sw.elapsedMilliseconds}',
         );
+        if (_shouldRetryHttpResponse(resp, attempt)) {
+          final delay = _retryDelayForResponse(resp);
+          _log(
+            '[LCA] $providerLabel returned HTTP ${resp.statusCode}. '
+            'callLabel=$callLabel attempt=$attempt. Retrying once after '
+            '${delay.inMilliseconds}ms...',
+          );
+          await Future<void>.delayed(delay);
+          resp = null;
+          continue;
+        }
         break;
       } on TimeoutException catch (e) {
         sw.stop();
@@ -551,6 +653,78 @@ class LlmScenarioController {
     return decoded;
   }
 
+  Map<String, dynamic> _chatResponseDiagnostics(Map<String, dynamic> response) {
+    final out = <String, dynamic>{
+      if (response['id'] != null) 'id': response['id'],
+      if (response['model'] != null) 'model': response['model'],
+      if (response['created'] != null) 'created': response['created'],
+      if (response['usage'] is Map) 'usage': response['usage'],
+    };
+    final choices = response['choices'];
+    if (choices is List && choices.isNotEmpty && choices.first is Map) {
+      final choice = (choices.first as Map).cast<String, dynamic>();
+      final message = choice['message'];
+      final messageMap =
+          message is Map ? message.cast<String, dynamic>() : const <String, dynamic>{};
+      final contentText = _extractContentText(messageMap['content']);
+      final toolCalls = messageMap['tool_calls'];
+      out['choice'] = {
+        if (choice['finish_reason'] != null)
+          'finish_reason': choice['finish_reason'],
+        if (choice['index'] != null) 'index': choice['index'],
+        'message_role': messageMap['role']?.toString() ?? '',
+        'content_chars': contentText?.length ?? 0,
+        'content': contentText ?? '',
+        'tool_calls': toolCalls is List
+            ? toolCalls.map(_sanitizedToolCallDiagnostics).toList()
+            : const <Map<String, dynamic>>[],
+      };
+    }
+    return out;
+  }
+
+  Map<String, dynamic> _sanitizedToolCallDiagnostics(dynamic raw) {
+    if (raw is! Map) return {'malformed': raw.toString()};
+    final tool = raw.cast<String, dynamic>();
+    final fnRaw = tool['function'];
+    final fn = fnRaw is Map ? fnRaw.cast<String, dynamic>() : const <String, dynamic>{};
+    return {
+      if (tool['id'] != null) 'id': tool['id'].toString(),
+      if (tool['type'] != null) 'type': tool['type'].toString(),
+      'function': {
+        'name': (fn['name'] ?? '').toString(),
+        'arguments': (fn['arguments'] ?? '').toString(),
+      },
+    };
+  }
+
+  List<Map<String, dynamic>> _extractInlineToolCallsFromContent(String? content) {
+    if (content == null || content.trim().isEmpty) {
+      return const <Map<String, dynamic>>[];
+    }
+    final pattern = RegExp(
+      r'<\|tool_call_begin\|>\s*(?:functions\.)?([A-Za-z_][A-Za-z0-9_]*)(?::[0-9]+)?\s*<\|tool_call_argument_begin\|>(.*?)<\|tool_call_end\|>',
+      dotAll: true,
+    );
+    final out = <Map<String, dynamic>>[];
+    var index = 0;
+    for (final match in pattern.allMatches(content)) {
+      final name = (match.group(1) ?? '').trim();
+      final arguments = (match.group(2) ?? '').trim();
+      if (name.isEmpty || arguments.isEmpty) continue;
+      out.add({
+        'id': 'recovered_inline_tool_call_$index',
+        'type': 'function',
+        'function': {
+          'name': name,
+          'arguments': arguments,
+        },
+      });
+      index += 1;
+    }
+    return out;
+  }
+
   /// Parses GPT output for tool/function calls or direct scenarios.
   /// Supports multiple tool calls in a single assistant turn.
   Future<_ParsedLLMOutput> _handleToolOrScenarios(
@@ -561,6 +735,8 @@ class LlmScenarioController {
     String prompt,
     Map<String, dynamic> optimizationContext,
     List<LlmDocumentReference> uploadedDocuments,
+    Map<String, dynamic> diagnostics,
+    List<Map<String, dynamic>> functions,
   ) async {
     final firstChoice =
         (firstResp['choices'] as List).first as Map<String, dynamic>;
@@ -571,6 +747,13 @@ class LlmScenarioController {
     final documentProvenance = <DocumentExtractionRecord>[];
     final initialContentText = _extractContentText(message['content']);
     _logModelText('first_call_assistant_content', initialContentText);
+    diagnostics['parser'] = <String, dynamic>{
+      'path': 'first_response',
+      'initial_content_chars': initialContentText?.length ?? 0,
+      'initial_has_tool_calls':
+          message['tool_calls'] is List && (message['tool_calls'] as List).isNotEmpty,
+      'initial_has_legacy_function_call': message['function_call'] != null,
+    };
 
     // Defensive check for an empty assistant message
     if ((message['tool_calls'] == null ||
@@ -578,6 +761,11 @@ class LlmScenarioController {
         (message['function_call'] == null) &&
         (initialContentText == null || initialContentText.trim().isEmpty)) {
       _log('[LCA] Assistant returned empty content and no tool calls');
+      diagnostics['parser'] = {
+        ...((diagnostics['parser'] as Map?)?.cast<String, dynamic>() ??
+            const <String, dynamic>{}),
+        'rejection_stage': 'empty_assistant_message',
+      };
       throw Exception(
           'Assistant returned an empty message. Check model, prompt, or function specs.');
     }
@@ -600,7 +788,11 @@ class LlmScenarioController {
       }
 
       if (toolCalls.isEmpty) {
-        final payload = _extractAssistantPayloadFromMessage(message);
+        final payload = _extractAssistantPayloadFromMessage(
+          message,
+          diagnostics: diagnostics,
+          label: 'first_response',
+        );
         _log('[LCA] No tool calls. Parsed assistant payload directly');
         final validated = _mapChangesWithValidation(
           payload,
@@ -609,6 +801,7 @@ class LlmScenarioController {
           requestedTools: functionsUsed,
           toolMemory: _OptimizationToolMemory(),
         );
+        _recordValidationDiagnostics(diagnostics, validated);
         return _ParsedLLMOutput(
           functionsUsed: functionsUsed,
           rawDeltasByScenario:
@@ -619,6 +812,23 @@ class LlmScenarioController {
           documentProvenance: documentProvenance,
           abstention: validated.abstention,
         );
+      }
+
+      if (formulaCalculatorEnabled) {
+        final firstRoundToolNames = <String>{};
+        for (final tc in toolCalls) {
+          if (tc is! Map) continue;
+          final fnRaw = tc['function'];
+          if (fnRaw is! Map) continue;
+          final name = (fnRaw['name'] ?? '').toString().trim();
+          if (name.isNotEmpty) firstRoundToolNames.add(name);
+        }
+        if (firstRoundToolNames.contains('simplexLatticeDesign') &&
+            firstRoundToolNames.contains('formulaCalculator')) {
+          _log(
+            '[LCA] Formula sequencing warning: formulaCalculator was requested in the same tool round as simplexLatticeDesign.',
+          );
+        }
       }
 
       final followup = <Map<String, dynamic>>[
@@ -653,13 +863,13 @@ class LlmScenarioController {
         final fn = fnRaw.cast<String, dynamic>();
         final name = (fn['name'] ?? '').toString().trim();
         if (name.isEmpty) {
-        return _ParsedLLMOutput(
-          functionsUsed: functionsUsed,
-          rawDeltasByScenario: const <String, List<Map<String, dynamic>>>{},
-          documentProvenance: documentProvenance,
-          abstention: const LlmScenarioAbstention(
-            reason: 'Tool call payload is malformed (missing function name).',
-            requiredCapability: 'Valid tool call schema from the model',
+          return _ParsedLLMOutput(
+            functionsUsed: functionsUsed,
+            rawDeltasByScenario: const <String, List<Map<String, dynamic>>>{},
+            documentProvenance: documentProvenance,
+            abstention: const LlmScenarioAbstention(
+              reason: 'Tool call payload is malformed (missing function name).',
+              requiredCapability: 'Valid tool call schema from the model',
             ),
           );
         }
@@ -778,10 +988,12 @@ class LlmScenarioController {
           toolReturn: toolReturn,
           toolMemory: toolMemory,
         );
-        final toolContent = jsonEncode(toolReturn);
+        final rawToolContent = jsonEncode(toolReturn);
+        final toolContent = _toolContentForFollowup(name, toolReturn);
         _log(
             '[LCA] Tool[$idx] result keys=${toolReturn.keys.join(', ')} '
-            'bytes=${utf8.encode(toolContent).length}');
+            'rawBytes=${utf8.encode(rawToolContent).length} '
+            'followupBytes=${utf8.encode(toolContent).length}');
 
         followup.add({
           'role': 'tool',
@@ -791,17 +1003,220 @@ class LlmScenarioController {
         idx += 1;
       }
 
+      followup.add({
+        'role': 'user',
+        'content': formulaCalculatorEnabled &&
+                functionsUsed.contains('simplexLatticeDesign') &&
+                !functionsUsed.contains('formulaCalculator')
+            ? _formulaCalculatorFollowupReminder(toolMemory)
+            : _finalJsonOnlyReminder(),
+      });
+
       _log('[LCA] Second $providerLabel call for final scenarios (JSON only)');
       final secondResp = await _callOpenAI(
         systemPrompt: systemPrompt,
         userPayload: userPayload,
+        functions: formulaCalculatorEnabled &&
+                functionsUsed.contains('simplexLatticeDesign') &&
+                !functionsUsed.contains('formulaCalculator')
+            ? functions
+            : null,
+        functionCallMode: formulaCalculatorEnabled &&
+                functionsUsed.contains('simplexLatticeDesign') &&
+                !functionsUsed.contains('formulaCalculator')
+            ? 'formulaCalculator'
+            : 'auto',
         messagesOverride: followup,
-        jsonOnly: true,
+        jsonOnly: !(formulaCalculatorEnabled &&
+            functionsUsed.contains('simplexLatticeDesign') &&
+            !functionsUsed.contains('formulaCalculator')),
         callLabel: 'second_call_after_tools',
       );
+      diagnostics['second_response'] = _chatResponseDiagnostics(secondResp);
+
+      final secondMessage =
+          (secondResp['choices'] as List).first['message'] as Map<String, dynamic>;
+      final rawSecondToolCalls = secondMessage['tool_calls'];
+      final recoveredSecondToolCalls =
+          rawSecondToolCalls is List && rawSecondToolCalls.isNotEmpty
+              ? const <Map<String, dynamic>>[]
+              : _extractInlineToolCallsFromContent(
+                  _extractContentText(secondMessage['content']),
+                );
+      final secondToolCalls =
+          rawSecondToolCalls is List && rawSecondToolCalls.isNotEmpty
+              ? rawSecondToolCalls
+              : recoveredSecondToolCalls;
+      if (recoveredSecondToolCalls.isNotEmpty) {
+        _log(
+          '[LCA] Recovered ${recoveredSecondToolCalls.length} inline second-round tool call(s) from assistant content',
+        );
+      }
+      if (secondToolCalls.isNotEmpty) {
+        _log('[LCA] second tool_calls count=${secondToolCalls.length}');
+        if (secondToolCalls.length > _maxToolCallsPerTurn) {
+          return _ParsedLLMOutput(
+            functionsUsed: functionsUsed,
+            rawDeltasByScenario: const <String, List<Map<String, dynamic>>>{},
+            documentProvenance: documentProvenance,
+            abstention: LlmScenarioAbstention(
+              reason:
+                  'Model requested ${secondToolCalls.length} second-round tool calls, exceeding the hard limit of $_maxToolCallsPerTurn.',
+              requiredCapability: 'Use fewer tool calls in one generation',
+            ),
+          );
+        }
+
+        followup.add({
+          'role': 'assistant',
+          'content': secondMessage['content'],
+          'tool_calls': secondToolCalls,
+        });
+
+        var secondIdx = 0;
+        for (final tc in secondToolCalls) {
+          final tool = (tc as Map).cast<String, dynamic>();
+          final toolId = tool['id']?.toString() ?? 'second_tool_call_$secondIdx';
+          final fnRaw = tool['function'];
+          if (fnRaw is! Map) {
+            return _ParsedLLMOutput(
+              functionsUsed: functionsUsed,
+              rawDeltasByScenario: const <String, List<Map<String, dynamic>>>{},
+              documentProvenance: documentProvenance,
+              abstention: const LlmScenarioAbstention(
+                reason:
+                    'Second-round tool call payload is malformed (missing function object).',
+                requiredCapability: 'Valid tool call schema from the model',
+              ),
+            );
+          }
+          final fn = fnRaw.cast<String, dynamic>();
+          final name = (fn['name'] ?? '').toString().trim();
+          if (name != 'formulaCalculator') {
+            return _ParsedLLMOutput(
+              functionsUsed: functionsUsed,
+              rawDeltasByScenario: const <String, List<Map<String, dynamic>>>{},
+              documentProvenance: documentProvenance,
+              abstention: LlmScenarioAbstention(
+                reason:
+                    'Only formulaCalculator is allowed in the second tool round; model requested "$name".',
+                requiredCapability:
+                    'Use formulaCalculator or output final JSON directly',
+              ),
+            );
+          }
+          functionsUsed.add(name);
+
+          final argsRaw = fn['arguments'];
+          Map<String, dynamic> args;
+          try {
+            final decodedArgs =
+                (argsRaw is String) ? jsonDecode(argsRaw) : argsRaw;
+            if (decodedArgs is! Map) {
+              return _ParsedLLMOutput(
+                functionsUsed: functionsUsed,
+                rawDeltasByScenario:
+                    const <String, List<Map<String, dynamic>>>{},
+                documentProvenance: documentProvenance,
+                abstention: const LlmScenarioAbstention(
+                  reason:
+                      'formulaCalculator arguments must be a JSON object and were rejected.',
+                  requiredCapability: 'Valid JSON arguments for formulaCalculator',
+                ),
+              );
+            }
+            args = decodedArgs.cast<String, dynamic>();
+          } on FormatException {
+            return _ParsedLLMOutput(
+              functionsUsed: functionsUsed,
+              rawDeltasByScenario: const <String, List<Map<String, dynamic>>>{},
+              documentProvenance: documentProvenance,
+              abstention: const LlmScenarioAbstention(
+                reason:
+                    'formulaCalculator arguments were invalid JSON and execution was blocked.',
+                requiredCapability: 'Valid JSON arguments for formulaCalculator',
+              ),
+            );
+          }
+
+          _log(
+              '[LCA] Executing second-round tool[$secondIdx] name=$name id=$toolId args=${jsonEncode(args)}');
+          final localResult = await _runLocalFunction(
+            name,
+            args,
+            baseModelFull,
+            optimizationContext,
+            prompt: prompt,
+            uploadedDocuments: uploadedDocuments,
+          );
+          final Map<String, dynamic> toolReturn =
+              _wrapToolResult(name, localResult);
+          _recordToolResult(
+            controller: this,
+            name: name,
+            args: args,
+            toolReturn: toolReturn,
+            toolMemory: toolMemory,
+          );
+          final rawToolContent = jsonEncode(toolReturn);
+          final toolContent = _toolContentForFollowup(name, toolReturn);
+          _log(
+              '[LCA] Second-round tool[$secondIdx] result keys=${toolReturn.keys.join(', ')} '
+              'rawBytes=${utf8.encode(rawToolContent).length} '
+              'followupBytes=${utf8.encode(toolContent).length}');
+
+          followup.add({
+            'role': 'tool',
+            'tool_call_id': toolId,
+            'content': toolContent,
+          });
+          secondIdx += 1;
+        }
+
+        followup.add({
+          'role': 'user',
+          'content': _finalJsonOnlyReminder(formulaResultsAvailable: true),
+        });
+
+        _log('[LCA] Third $providerLabel call for final scenarios (JSON only)');
+        final thirdResp = await _callOpenAI(
+          systemPrompt: systemPrompt,
+          userPayload: userPayload,
+          messagesOverride: followup,
+          jsonOnly: true,
+          callLabel: 'third_call_after_formula_tool',
+        );
+        diagnostics['third_response'] = _chatResponseDiagnostics(thirdResp);
+
+        final payload = _extractAssistantPayloadFromMessage(
+          (thirdResp['choices'] as List).first['message'],
+          diagnostics: diagnostics,
+          label: 'third_response',
+        );
+        _log('[LCA] Final payload received. Validating and mapping changes');
+        final validated = _mapChangesWithValidation(
+          payload,
+          baseModelFull: baseModelFull,
+          optimizationContext: optimizationContext,
+          requestedTools: functionsUsed,
+          toolMemory: toolMemory,
+        );
+        _recordValidationDiagnostics(diagnostics, validated);
+        return _ParsedLLMOutput(
+          functionsUsed: functionsUsed,
+          rawDeltasByScenario: validated.rawDeltasByScenario ??
+              const <String, List<Map<String, dynamic>>>{},
+          optimizationPayload: validated.optimizationPayload,
+          uncertaintyPayload: validated.uncertaintyPayload,
+          documentProvenance: documentProvenance,
+          abstention: validated.abstention,
+        );
+      }
 
       final payload = _extractAssistantPayloadFromMessage(
-        (secondResp['choices'] as List).first['message'],
+        secondMessage,
+        diagnostics: diagnostics,
+        label: 'second_response',
       );
       _log('[LCA] Final payload received. Validating and mapping changes');
       final validated = _mapChangesWithValidation(
@@ -811,6 +1226,7 @@ class LlmScenarioController {
         requestedTools: functionsUsed,
         toolMemory: toolMemory,
       );
+      _recordValidationDiagnostics(diagnostics, validated);
       return _ParsedLLMOutput(
         functionsUsed: functionsUsed,
         rawDeltasByScenario: validated.rawDeltasByScenario ??
@@ -921,8 +1337,12 @@ class LlmScenarioController {
         toolReturn: toolReturn,
         toolMemory: toolMemory,
       );
+      final rawToolContent = jsonEncode(toolReturn);
+      final toolContent = _toolContentForFollowup(name, toolReturn);
       _log(
-          '[LCA] Legacy function_call local result keys=${toolReturn.keys.join(', ')}');
+          '[LCA] Legacy function_call local result keys=${toolReturn.keys.join(', ')} '
+          'rawBytes=${utf8.encode(rawToolContent).length} '
+          'followupBytes=${utf8.encode(toolContent).length}');
 
       final secondMessages = [
         {'role': 'system', 'content': systemPrompt},
@@ -932,7 +1352,13 @@ class LlmScenarioController {
           'content': null,
           'function_call': {'name': name, 'arguments': jsonEncode(args)},
         },
-        {'role': 'function', 'name': name, 'content': jsonEncode(toolReturn)},
+        {'role': 'function', 'name': name, 'content': toolContent},
+        {
+          'role': 'user',
+          'content': _finalJsonOnlyReminder(
+            formulaResultsAvailable: name == 'formulaCalculator',
+          ),
+        },
       ];
 
       _log('[LCA] Second $providerLabel call for final scenarios (JSON only)');
@@ -943,9 +1369,12 @@ class LlmScenarioController {
         jsonOnly: true,
         callLabel: 'second_call_after_legacy_function',
       );
+      diagnostics['second_response'] = _chatResponseDiagnostics(secondResp);
 
       final payload = _extractAssistantPayloadFromMessage(
         (secondResp['choices'] as List).first['message'],
+        diagnostics: diagnostics,
+        label: 'second_response',
       );
       _log('[LCA] Final payload received. Validating and mapping changes');
       final validated = _mapChangesWithValidation(
@@ -955,6 +1384,7 @@ class LlmScenarioController {
         requestedTools: functionsUsed,
         toolMemory: toolMemory,
       );
+      _recordValidationDiagnostics(diagnostics, validated);
       return _ParsedLLMOutput(
         functionsUsed: functionsUsed,
         rawDeltasByScenario: validated.rawDeltasByScenario ??
@@ -968,7 +1398,11 @@ class LlmScenarioController {
     // Direct scenarios
     else {
       _log('[LCA] No tools. Attempting to parse assistant payload directly');
-      final payload = _extractAssistantPayloadFromMessage(message);
+      final payload = _extractAssistantPayloadFromMessage(
+        message,
+        diagnostics: diagnostics,
+        label: 'first_response',
+      );
       final validated = _mapChangesWithValidation(
         payload,
         baseModelFull: baseModelFull,
@@ -976,6 +1410,7 @@ class LlmScenarioController {
         requestedTools: functionsUsed,
         toolMemory: _OptimizationToolMemory(),
       );
+      _recordValidationDiagnostics(diagnostics, validated);
       rawDeltasByScenario = validated.rawDeltasByScenario ??
           const <String, List<Map<String, dynamic>>>{};
       if (validated.abstention == null) {
@@ -999,6 +1434,25 @@ class LlmScenarioController {
     );
   }
 
+  void _recordValidationDiagnostics(
+    Map<String, dynamic> diagnostics,
+    _ValidatedScenarioChanges validated,
+  ) {
+    diagnostics['validation'] = {
+      'status': validated.abstention == null ? 'accepted' : 'rejected',
+      if (validated.abstention != null)
+        'abstention': validated.abstention!.toJson(),
+      'scenario_count': validated.rawDeltasByScenario?.length ?? 0,
+      'change_count': validated.rawDeltasByScenario?.values.fold<int>(
+            0,
+            (sum, changes) => sum + changes.length,
+          ) ??
+          0,
+      'has_optimization_payload': validated.optimizationPayload != null,
+      'has_uncertainty_payload': validated.uncertaintyPayload != null,
+    };
+  }
+
   /// Wrap local tool output in a shape the LLM prompt expects.
   Map<String, dynamic> _wrapToolResult(String name, dynamic localResult) {
     switch (name) {
@@ -1007,12 +1461,367 @@ class LlmScenarioController {
         return localResult is Map<String, dynamic>
             ? localResult
             : {'matches': localResult};
-      case 'oneAtATimeSensitivity':
       case 'simplexLatticeDesign':
+        return _simplexToolResult(localResult);
+      case 'oneAtATimeSensitivity':
         return {'changeLists': localResult};
+      case 'formulaCalculator':
+        return localResult is Map<String, dynamic>
+            ? localResult
+            : {'result': localResult};
       default:
         return {'result': localResult};
     }
+  }
+
+  Map<String, dynamic> _simplexToolResult(dynamic localResult) {
+    return {
+      'changeLists': localResult,
+      if (localResult is List)
+        'candidate_summaries': _simplexCandidateSummaries(localResult),
+      if (localResult is List)
+        'candidate_usage': {
+          'id_rule': 'Use candidate_summaries[].id as formulaCalculator id.',
+          'argument_source':
+              'Use candidate_summaries[].parameter_values for formula arguments derived from lattice candidates.',
+          'final_json_rule':
+              'Final scenarios must copy the matching changeLists entry for the same candidate id/order.',
+        },
+    };
+  }
+
+  List<Map<String, dynamic>> _simplexCandidateSummaries(List<dynamic> changeLists) {
+    final out = <Map<String, dynamic>>[];
+    for (var i = 0; i < changeLists.length; i += 1) {
+      final changes = changeLists[i];
+      final parameterValues = <String, double>{};
+      if (changes is List) {
+        for (final rawChange in changes) {
+          if (rawChange is! Map) continue;
+          final change = rawChange.cast<String, dynamic>();
+          final field = (change['field'] ?? '').toString().trim();
+          final value = _toFiniteDouble(change['new_value']);
+          if (value == null) continue;
+          final paramName = _parameterNameFromChangeField(field);
+          if (paramName != null) parameterValues[paramName] = value;
+        }
+      }
+      out.add({
+        'id': 'candidate_${i + 1}',
+        'change_list_index': i,
+        'parameter_values': parameterValues,
+      });
+    }
+    return out;
+  }
+
+  String? _parameterNameFromChangeField(String field) {
+    if (field.startsWith('parameters.global.')) {
+      final name = field.substring('parameters.global.'.length).trim();
+      return name.isEmpty ? null : name;
+    }
+    if (field.startsWith('parameters.process.')) {
+      final name = field.substring('parameters.process.'.length).trim();
+      return name.isEmpty ? null : name;
+    }
+    if (field.startsWith('parameters.process:')) {
+      final rest = field.substring('parameters.process:'.length);
+      final dot = rest.indexOf('.');
+      if (dot <= 0 || dot >= rest.length - 1) return null;
+      final name = rest.substring(dot + 1).trim();
+      return name.isEmpty ? null : name;
+    }
+    return null;
+  }
+
+  String _toolContentForFollowup(String name, Map<String, dynamic> toolReturn) {
+    final payload = _followupToolPayload(name, toolReturn);
+    return jsonEncode(payload);
+  }
+
+  Map<String, dynamic> _followupToolPayload(
+    String name,
+    Map<String, dynamic> toolReturn,
+  ) {
+    if (name == 'DocumentParameterisation') {
+      return _compactDocumentToolPayload(toolReturn);
+    }
+    if (name == 'formulaCalculator') {
+      return _formulaToolPayload(toolReturn);
+    }
+    return toolReturn;
+  }
+
+  Map<String, dynamic> _formulaToolPayload(Map<String, dynamic> toolReturn) {
+    return {
+      ...toolReturn,
+      'final_json_usage': {
+        'formula_value_source': 'formulaCalculator.results only',
+        'candidate_mapping':
+            'Match each final scenario only to the formula result with the same candidate id/order.',
+        'if_unclear':
+            'Omit formula values from scenario names rather than recalculating or guessing.',
+      },
+    };
+  }
+
+  Map<String, dynamic> _compactDocumentToolPayload(
+    Map<String, dynamic> toolReturn,
+  ) {
+    final out = <String, dynamic>{
+      if (toolReturn['success'] != null) 'success': toolReturn['success'] == true,
+      'followup_note':
+          'Use the extracted values below to build the final JSON. '
+              'Do not return this document payload or document metadata.',
+    };
+
+    final rawDocument = toolReturn['document'];
+    if (rawDocument is Map) {
+      out['document'] = _compactDocumentMetadata(
+        rawDocument.cast<String, dynamic>(),
+      );
+    }
+
+    if (toolReturn['total_results'] != null) {
+      out['total_results'] =
+          _toInt(toolReturn['total_results']) ?? toolReturn['total_results'];
+    }
+    if (toolReturn['total_matches'] != null) {
+      out['total_matches'] =
+          _toInt(toolReturn['total_matches']) ?? toolReturn['total_matches'];
+    }
+
+    final results = toolReturn['results'];
+    if (results is List) {
+      final compactResults = <Map<String, dynamic>>[];
+      for (final item in results) {
+        if (item is! Map) continue;
+        compactResults.add(
+          _compactDocumentQueryRecord(item.cast<String, dynamic>()),
+        );
+      }
+      out['results'] = compactResults;
+      return out;
+    }
+
+    final compactSingle = _compactDocumentQueryRecord(toolReturn);
+    out.addAll(compactSingle);
+    return out;
+  }
+
+  Map<String, dynamic> _compactDocumentMetadata(Map<String, dynamic> raw) {
+    return {
+      if ((raw['id'] ?? '').toString().trim().isNotEmpty) 'id': raw['id'],
+      if ((raw['name'] ?? '').toString().trim().isNotEmpty) 'name': raw['name'],
+      if ((raw['kind'] ?? '').toString().trim().isNotEmpty) 'kind': raw['kind'],
+      if (_toInt(raw['page_count']) != null) 'page_count': _toInt(raw['page_count']),
+      if (_toInt(raw['detected_table_count']) != null)
+        'detected_table_count': _toInt(raw['detected_table_count']),
+      if (_coercePositiveIntList(raw['detected_table_pages']).isNotEmpty)
+        'detected_table_pages': _coercePositiveIntList(raw['detected_table_pages']),
+    };
+  }
+
+  Map<String, dynamic> _compactDocumentQueryRecord(Map<String, dynamic> raw) {
+    final out = <String, dynamic>{};
+    final query = (raw['query'] ?? '').toString().trim();
+    if (query.isNotEmpty) out['query'] = query;
+
+    final pageNumbers = _coercePositiveIntList(raw['page_numbers']);
+    if (pageNumbers.isNotEmpty) out['page_numbers'] = pageNumbers;
+
+    final assumptions = _documentStringList(raw['assumptions']);
+    if (assumptions.isNotEmpty) out['assumptions'] = assumptions.take(5).toList();
+
+    final matches = _documentMapList(raw['matches']);
+    final selectedMatches = _selectDocumentMatchesForFollowup(matches);
+    if (selectedMatches.isNotEmpty) {
+      out['matches'] = [
+        for (final match in selectedMatches) _compactDocumentMatchForFollowup(match),
+      ];
+      if (matches.length > selectedMatches.length) {
+        out['omitted_match_count'] = matches.length - selectedMatches.length;
+      }
+    }
+
+    final fallbackMatches = _documentMapList(raw['fallback_text_matches']);
+    if (fallbackMatches.isNotEmpty) {
+      out['fallback_text_matches'] = _compactDocumentFallbackTextMatches(
+        fallbackMatches,
+      );
+      if (fallbackMatches.length > _maxDocumentFallbackTextMatchesForFollowup) {
+        out['omitted_fallback_text_match_count'] =
+            fallbackMatches.length - _maxDocumentFallbackTextMatchesForFollowup;
+      }
+    }
+
+    if (_toInt(raw['total_matches']) != null) {
+      out['total_matches'] = _toInt(raw['total_matches']);
+    } else if (matches.isNotEmpty) {
+      out['total_matches'] = matches.length;
+    }
+    return out;
+  }
+
+  List<Map<String, dynamic>> _selectDocumentMatchesForFollowup(
+    List<Map<String, dynamic>> matches,
+  ) {
+    if (matches.isEmpty) return const <Map<String, dynamic>>[];
+    final sorted = matches.toList()
+      ..sort((left, right) {
+        final priorityDelta = _documentMatchPriorityScore(right) -
+            _documentMatchPriorityScore(left);
+        if (priorityDelta != 0) return priorityDelta;
+        final scoreLeft = _toFiniteDouble(left['score']) ?? 0;
+        final scoreRight = _toFiniteDouble(right['score']) ?? 0;
+        return scoreRight.compareTo(scoreLeft);
+      });
+    return sorted.take(_maxDocumentMatchesPerQueryForFollowup).toList();
+  }
+
+  int _documentMatchPriorityScore(Map<String, dynamic> match) {
+    final normalizedHeaders = _documentStringList(match['headers'])
+        .map(_normalizeReferenceText)
+        .toSet();
+    var score = 0;
+    if (normalizedHeaders.contains('parameter')) score += 300;
+    if (normalizedHeaders.contains('scenario value')) score += 240;
+    if (normalizedHeaders.contains('baseline')) score += 120;
+    if (normalizedHeaders.contains('unit')) score += 40;
+    if (normalizedHeaders.contains('scenario') &&
+        normalizedHeaders.contains('short name')) {
+      score += 25;
+    }
+    final rows = match['rows'];
+    if (rows is List) {
+      final rowCount = rows.length;
+      score += rowCount > 20 ? 20 : rowCount;
+    }
+    return score;
+  }
+
+  Map<String, dynamic> _compactDocumentMatchForFollowup(
+    Map<String, dynamic> raw,
+  ) {
+    final out = <String, dynamic>{};
+    if (_toInt(raw['page_number']) != null) {
+      out['page_number'] = _toInt(raw['page_number']);
+    }
+    if (_toInt(raw['table_index']) != null) {
+      out['table_index'] = _toInt(raw['table_index']);
+    }
+    final score = _toFiniteDouble(raw['score']);
+    if (score != null) out['score'] = score;
+
+    final headers = _documentStringList(raw['headers']);
+    if (headers.isNotEmpty) out['headers'] = headers;
+
+    final rowMaps = _documentMapList(raw['rows']);
+    if (rowMaps.isNotEmpty) {
+      out['rows'] = [
+        for (final row in rowMaps.take(_maxDocumentRowsPerMatchForFollowup))
+          _compactDocumentRowForFollowup(row, headers),
+      ];
+      if (rowMaps.length > _maxDocumentRowsPerMatchForFollowup) {
+        out['omitted_row_count'] =
+            rowMaps.length - _maxDocumentRowsPerMatchForFollowup;
+      }
+    }
+    return out;
+  }
+
+  Map<String, dynamic> _compactDocumentRowForFollowup(
+    Map<String, dynamic> raw,
+    List<String> headers,
+  ) {
+    final out = <String, dynamic>{};
+    if (_toInt(raw['row_index']) != null) {
+      out['row_index'] = _toInt(raw['row_index']);
+    }
+
+    final rowObject = raw['row_object'];
+    final compactObject = <String, dynamic>{};
+    if (rowObject is Map) {
+      for (final entry in rowObject.entries) {
+        final key = entry.key.toString().trim();
+        if (key.isEmpty) continue;
+        compactObject[key] = _compactDocumentScalar(entry.value);
+      }
+    }
+
+    if (compactObject.isEmpty) {
+      final values = _documentStringList(raw['values']);
+      final limit = headers.length < values.length ? headers.length : values.length;
+      for (var i = 0; i < limit; i += 1) {
+        final key = headers[i].trim();
+        if (key.isEmpty) continue;
+        compactObject[key] = _compactDocumentScalar(values[i]);
+      }
+      if (compactObject.isEmpty && values.isNotEmpty) {
+        out['values'] = values.map(_compactDocumentString).toList();
+      }
+    }
+
+    if (compactObject.isNotEmpty) {
+      out['row_object'] = compactObject;
+    }
+    return out;
+  }
+
+  List<Map<String, dynamic>> _compactDocumentFallbackTextMatches(
+    List<Map<String, dynamic>> matches,
+  ) {
+    final out = <Map<String, dynamic>>[];
+    for (final item in matches.take(_maxDocumentFallbackTextMatchesForFollowup)) {
+      final entry = <String, dynamic>{};
+      if (_toInt(item['page_number']) != null) {
+        entry['page_number'] = _toInt(item['page_number']);
+      }
+      final text = (item['text'] ?? item['snippet'] ?? '').toString().trim();
+      if (text.isNotEmpty) {
+        entry['text'] = _compactDocumentString(text);
+      }
+      if (entry.isNotEmpty) out.add(entry);
+    }
+    return out;
+  }
+
+  dynamic _compactDocumentScalar(dynamic value) {
+    if (value == null || value is num || value is bool) return value;
+    return _compactDocumentString(value.toString());
+  }
+
+  String _compactDocumentString(String value) {
+    final compact = value
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (compact.length <= _maxDocumentValueCharsForFollowup) {
+      return compact;
+    }
+    return '${compact.substring(0, _maxDocumentValueCharsForFollowup)}...';
+  }
+
+  List<Map<String, dynamic>> _documentMapList(dynamic value) {
+    if (value is! List) return const <Map<String, dynamic>>[];
+    final out = <Map<String, dynamic>>[];
+    for (final item in value) {
+      if (item is Map) {
+        out.add(item.cast<String, dynamic>());
+      }
+    }
+    return out;
+  }
+
+  List<String> _documentStringList(dynamic value) {
+    if (value is! List) return const <String>[];
+    final out = <String>[];
+    for (final item in value) {
+      final text = item.toString().trim();
+      if (text.isNotEmpty) out.add(text);
+    }
+    return out;
   }
 
   /// Local numeric or data function execution.
@@ -1126,9 +1935,26 @@ class LlmScenarioController {
           baseModel: baseModelFull,
           parameterNames: (args['parameterNames'] as List).cast<String>(),
           m: (args['m'] as num).toInt(),
+          removeEdges: args['removeEdges'] == true,
         );
         _log('[LCA] simplexLatticeDesign produced ${simplex.length} change-list(s)');
         return simplex;
+      case 'formulaCalculator':
+        final rawCalculations = args['calculations'];
+        if (rawCalculations is! List || rawCalculations.isEmpty) {
+          throw Exception('formulaCalculator requires a non-empty calculations list.');
+        }
+        final calculations = <Map<String, dynamic>>[];
+        for (final item in rawCalculations.take(120)) {
+          if (item is! Map) continue;
+          calculations.add(item.cast<String, dynamic>());
+        }
+        final result = formulaCalculator(calculations: calculations);
+        _log(
+          '[LCA] formulaCalculator produced '
+          '${((result['results'] as List?)?.length ?? 0)} result(s)',
+        );
+        return result;
       default:
         _log('[LCA] Unknown function or tool: $name');
         throw Exception('Unknown function or tool: $name');
@@ -1136,7 +1962,12 @@ class LlmScenarioController {
   }
 
   bool _isAllowedToolName(String name) {
-    return _allowedToolNames.contains(name.trim());
+    return llmFunctionsForVariant(
+      formulaCalculatorEnabled: formulaCalculatorEnabled,
+    )
+        .map((f) => (f['name'] ?? '').toString().trim())
+        .where((toolName) => toolName.isNotEmpty)
+        .contains(name.trim());
   }
 
   void _captureDocumentProvenance({
@@ -1364,7 +2195,11 @@ class LlmScenarioController {
     return out;
   }
 
-  _AssistantPayload _extractAssistantPayloadFromMessage(dynamic message) {
+  _AssistantPayload _extractAssistantPayloadFromMessage(
+    dynamic message, {
+    Map<String, dynamic>? diagnostics,
+    String label = 'assistant',
+  }) {
     final contentText = _extractContentText(message['content']);
     _logModelText('assistant_content_raw', contentText);
     if (contentText == null) {
@@ -1381,11 +2216,22 @@ class LlmScenarioController {
     }
     final cleaned = _normaliseJsonText(contentText.trim());
     _logModelText('assistant_content_normalized_for_json', cleaned);
+    final parseDiagnostics = <String, dynamic>{
+      'label': label,
+      'raw_content_chars': contentText.length,
+      'raw_content': contentText,
+      'normalized_content_chars': cleaned.length,
+      'normalized_content': cleaned,
+    };
 
     final selected = _selectBestPayloadMap(cleaned);
     if (selected == null) {
       _logModelText('assistant_content_parse_error_raw', contentText);
       _logModelText('assistant_content_parse_error_cleaned', cleaned);
+      parseDiagnostics['result'] = 'invalid_json';
+      parseDiagnostics['failure_reason'] =
+          'No JSON object could be decoded from assistant content.';
+      diagnostics?['payload_parse'] = parseDiagnostics;
       return const _AssistantPayload(
         abstention: LlmScenarioAbstention(
           reason: 'Model returned invalid JSON and execution was blocked.',
@@ -1400,10 +2246,19 @@ class LlmScenarioController {
         selected.recoveredText,
       );
     }
+    parseDiagnostics['result'] = 'json_object_selected';
+    parseDiagnostics['selected_payload'] = selected.payload;
+    parseDiagnostics['selected_payload_score'] = selected.score;
+    parseDiagnostics['selected_payload_keys'] = selected.payload.keys.toList();
+    if (selected.recoveredText != null) {
+      parseDiagnostics['recovered_text'] = selected.recoveredText;
+    }
 
     final parsed = selected.payload;
     final status = (parsed['status'] ?? '').toString().trim().toLowerCase();
     final topLevelMode = (parsed['mode'] ?? '').toString().trim().toLowerCase();
+    parseDiagnostics['selected_status'] = status;
+    parseDiagnostics['selected_mode'] = topLevelMode;
     if (status == 'unsupported') {
       final abstention = LlmScenarioAbstention(
         status: 'unsupported',
@@ -1418,12 +2273,30 @@ class LlmScenarioController {
       _log(
         '[LCA] Structured abstention received: ${jsonEncode(abstention.toJson())}',
       );
+      parseDiagnostics['accepted_as'] = 'unsupported';
+      diagnostics?['payload_parse'] = parseDiagnostics;
       return _AssistantPayload(abstention: abstention);
+    }
+    if (_looksLikeDocumentToolPayloadEcho(parsed)) {
+      parseDiagnostics['result'] = 'schema_rejected';
+      parseDiagnostics['accepted_as'] = 'document_tool_echo';
+      parseDiagnostics['failure_reason'] =
+          'Model repeated document extraction content instead of returning final structured JSON.';
+      diagnostics?['payload_parse'] = parseDiagnostics;
+      return const _AssistantPayload(
+        abstention: LlmScenarioAbstention(
+          reason:
+              'Model repeated document extraction output instead of converting it into final scenario, optimization, or uncertainty JSON.',
+          requiredCapability: 'Final structured JSON after document tool use',
+        ),
+      );
     }
     if (_looksLikeDirectOptimizationPayload(parsed) ||
         topLevelMode == 'parameter_threshold' ||
         topLevelMode == 'indicator_optimization') {
       _log('[LCA] Direct optimization payload parsed successfully');
+      parseDiagnostics['accepted_as'] = 'direct_optimization_payload';
+      diagnostics?['payload_parse'] = parseDiagnostics;
       return _AssistantPayload(optimizationJson: parsed);
     }
     if (_looksLikeDirectUncertaintyPayload(parsed) ||
@@ -1433,6 +2306,8 @@ class LlmScenarioController {
         '[LCA] Direct uncertainty payload parsed successfully. '
         'tool=${parsed['tool']} mode=$topLevelMode keys=${parsed.keys.join(', ')}',
       );
+      parseDiagnostics['accepted_as'] = 'direct_uncertainty_payload';
+      diagnostics?['payload_parse'] = parseDiagnostics;
       return _AssistantPayload(uncertaintyJson: parsed);
     }
     final optimizationAny = parsed['optimization'] ??
@@ -1440,11 +2315,17 @@ class LlmScenarioController {
         parsed['optimizationjson'];
     if (optimizationAny is Map) {
       _log('[LCA] Optimization JSON parsed successfully');
+      parseDiagnostics['accepted_as'] = 'wrapped_optimization_payload';
+      diagnostics?['payload_parse'] = parseDiagnostics;
       return _AssistantPayload(
         optimizationJson: optimizationAny.cast<String, dynamic>(),
       );
     }
     if (topLevelMode == 'optimization' && optimizationAny == null) {
+      parseDiagnostics['result'] = 'schema_rejected';
+      parseDiagnostics['failure_reason'] =
+          'Mode was optimization but no optimization object was present.';
+      diagnostics?['payload_parse'] = parseDiagnostics;
       return const _AssistantPayload(
         abstention: LlmScenarioAbstention(
           reason:
@@ -1462,14 +2343,22 @@ class LlmScenarioController {
         '[LCA] Wrapped uncertainty JSON parsed successfully. '
         'wrapperKeys=${parsed.keys.join(', ')}',
       );
+      parseDiagnostics['accepted_as'] = 'wrapped_uncertainty_payload';
+      diagnostics?['payload_parse'] = parseDiagnostics;
       return _AssistantPayload(
         uncertaintyJson: uncertaintyAny.cast<String, dynamic>(),
       );
     }
     if (topLevelMode == 'scenario_delta' || parsed['scenarios'] is Map) {
       _log('[LCA] Scenarios JSON parsed successfully');
+      parseDiagnostics['accepted_as'] = 'scenario_delta_payload';
+      diagnostics?['payload_parse'] = parseDiagnostics;
       return _AssistantPayload(scenariosJson: parsed);
     }
+    parseDiagnostics['result'] = 'schema_rejected';
+    parseDiagnostics['failure_reason'] =
+        'JSON object did not match scenario, optimization, uncertainty, or unsupported envelopes.';
+    diagnostics?['payload_parse'] = parseDiagnostics;
     return const _AssistantPayload(
       abstention: LlmScenarioAbstention(
         reason:
@@ -1530,6 +2419,7 @@ class LlmScenarioController {
     if (payload['uncertainty_payload'] is Map) score += 930;
     if (mode == 'scenario_delta') score += 800;
     if (payload['scenarios'] is Map) score += 800;
+    if (_looksLikeDocumentToolPayloadEcho(payload)) score -= 500;
     if (payload.containsKey('query') && payload.containsKey('limit')) score -= 200;
     return score;
   }
@@ -1636,6 +2526,11 @@ class LlmScenarioController {
       );
     }
 
+    final formulaTraceAbstention = _validateFormulaToolTrace(toolMemory);
+    if (formulaTraceAbstention != null) {
+      _log('[LCA] Formula trace warning: ${formulaTraceAbstention.reason}');
+    }
+
     final index = _buildModelValidationIndex(baseModelFull);
     final scenariosMap = scenariosAny.cast<dynamic, dynamic>();
     final out = <String, List<Map<String, dynamic>>>{};
@@ -1653,7 +2548,15 @@ class LlmScenarioController {
       }
 
       final scenarioRaw = entry.value;
-      if (scenarioRaw is! Map) {
+      final Map<String, dynamic> scenarioData;
+      if (scenarioRaw is List) {
+        _log(
+          '[LCA] Wrapping shorthand scenario "$scenarioName" list as {"changes": [...]}',
+        );
+        scenarioData = {'changes': scenarioRaw};
+      } else if (scenarioRaw is Map) {
+        scenarioData = scenarioRaw.cast<String, dynamic>();
+      } else {
         return _ValidatedScenarioChanges(
           abstention: LlmScenarioAbstention(
             reason: 'Scenario "$scenarioName" must be a JSON object.',
@@ -1661,7 +2564,6 @@ class LlmScenarioController {
           ),
         );
       }
-      final scenarioData = scenarioRaw.cast<String, dynamic>();
       final changesAny = scenarioData['changes'];
       if (changesAny is! List) {
         return _ValidatedScenarioChanges(
@@ -1706,6 +2608,12 @@ class LlmScenarioController {
               requiredCapability: 'Valid field value in each change',
             ),
           );
+        }
+        if (change['new_value'] == null) {
+          _log(
+            '[LCA] Dropping null-valued change in scenario "$scenarioName": field="$field"',
+          );
+          continue;
         }
         final newValue = _toFiniteDouble(change['new_value']);
         if (newValue == null) {
@@ -1853,6 +2761,15 @@ class LlmScenarioController {
         normalized,
         scenarioName: scenarioName,
       );
+      final formulaNameAbstention = _validateFormulaValuesInScenarioName(
+        scenarioName: scenarioName,
+        toolMemory: toolMemory,
+      );
+      if (formulaNameAbstention != null) {
+        _log(
+          '[LCA] Formula scenario-name warning: ${formulaNameAbstention.reason}',
+        );
+      }
       final finalActionBlob = jsonEncode(deduped);
       if (_structuralKeywordPattern.hasMatch(finalActionBlob)) {
         return _ValidatedScenarioChanges(
@@ -1869,6 +2786,97 @@ class LlmScenarioController {
 
     _log('[LCA] Validation and mapping complete');
     return _ValidatedScenarioChanges(rawDeltasByScenario: out);
+  }
+
+  LlmScenarioAbstention? _validateFormulaToolTrace(
+    _OptimizationToolMemory toolMemory,
+  ) {
+    if (!toolMemory.formulaToolUsed) return null;
+    if (toolMemory.formulaResultCount == 0) {
+      return const LlmScenarioAbstention(
+        reason:
+            'formulaCalculator was used but returned no usable result records.',
+        requiredCapability:
+            'Successful formulaCalculator results before final scenario JSON',
+      );
+    }
+    if (!toolMemory.formulaResultsAllSuccessful) {
+      return const LlmScenarioAbstention(
+        reason:
+            'formulaCalculator returned at least one failed result, so formula-derived scenarios were not merged.',
+        requiredCapability:
+            'Valid formulaCalculator arguments for every requested calculation',
+      );
+    }
+    final simplexCount = toolMemory.simplexChangeListCount;
+    if (simplexCount != null && toolMemory.formulaResultCount != simplexCount) {
+      return LlmScenarioAbstention(
+        reason:
+            'formulaCalculator returned ${toolMemory.formulaResultCount} result(s) for $simplexCount simplex-lattice candidate(s).',
+        requiredCapability:
+            'One successful formulaCalculator calculation per simplex-lattice candidate',
+      );
+    }
+    if (simplexCount != null) {
+      final expectedIds = {
+        for (var i = 0; i < simplexCount; i += 1) 'candidate_${i + 1}',
+      };
+      final actualIds = toolMemory.formulaResultIds.toSet();
+      if (!actualIds.containsAll(expectedIds)) {
+        return LlmScenarioAbstention(
+          reason:
+              'formulaCalculator result ids did not match the simplex-lattice candidate ids.',
+          requiredCapability:
+              'Formula calculation ids must be ${expectedIds.join(', ')}',
+        );
+      }
+    }
+    return null;
+  }
+
+  LlmScenarioAbstention? _validateFormulaValuesInScenarioName({
+    required String scenarioName,
+    required _OptimizationToolMemory toolMemory,
+  }) {
+    if (!toolMemory.formulaToolUsed) return null;
+    final numericUnitPattern = RegExp(
+      r'(^|[^A-Za-z0-9_])([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\s*(?:MPa|GPa|kPa|Pa|W|kW|MW|J|kJ|MJ|%|ohm|Ohm|USD|EUR|GBP)\b',
+    );
+    final labelledValues = <double>[];
+    for (final match in numericUnitPattern.allMatches(scenarioName)) {
+      final value = _toFiniteDouble(match.group(2));
+      if (value != null) labelledValues.add(value);
+    }
+    if (labelledValues.isEmpty) return null;
+    if (toolMemory.formulaOutputValues.isEmpty) {
+      return LlmScenarioAbstention(
+        reason:
+            'Scenario "$scenarioName" includes a formula-like numeric unit label, but formulaCalculator returned no numeric outputs.',
+        requiredCapability:
+            'Traceable formulaCalculator numeric output for formula-labelled scenario names',
+      );
+    }
+    for (final labelledValue in labelledValues) {
+      if (_matchesFormulaOutput(labelledValue, toolMemory.formulaOutputValues)) {
+        continue;
+      }
+      return LlmScenarioAbstention(
+        reason:
+            'Scenario "$scenarioName" includes formula value $labelledValue that is not traceable to formulaCalculator outputs.',
+        requiredCapability:
+            'Copy formula values from matching formulaCalculator results, or omit formula values from scenario names',
+      );
+    }
+    return null;
+  }
+
+  bool _matchesFormulaOutput(double labelledValue, List<double> outputValues) {
+    for (final outputValue in outputValues) {
+      final relativeTolerance = outputValue.abs() * 0.001;
+      final tolerance = relativeTolerance > 0.05 ? relativeTolerance : 0.05;
+      if ((labelledValue - outputValue).abs() <= tolerance) return true;
+    }
+    return false;
   }
 
   _ValidatedScenarioChanges _validateOptimizationPayload(
@@ -2435,6 +3443,23 @@ class LlmScenarioController {
     return parsed['sampling'] is Map &&
         parsed['parameters'] is List &&
         parsed['impact_categories'] is List;
+  }
+
+  bool _looksLikeDocumentToolPayloadEcho(Map<String, dynamic> payload) {
+    final hasDocument = payload['document'] is Map;
+    final hasResults = payload['results'] is List;
+    final hasMatches = payload['matches'] is List;
+    final hasQuery = (payload['query'] ?? '').toString().trim().isNotEmpty;
+    if (hasDocument && (hasResults || hasMatches)) return true;
+    if (hasQuery && hasMatches && payload.containsKey('success')) return true;
+    final hasTableShape =
+        payload['headers'] is List && payload['rows'] is List;
+    if (hasTableShape &&
+        (_toInt(payload['page_number']) != null ||
+            _toInt(payload['table_index']) != null)) {
+      return true;
+    }
+    return false;
   }
 
   List<String> _extractBalancedJsonObjects(String s) {

@@ -4,16 +4,30 @@ class _OptimizationToolMemory {
   final List<_ResolvedImpactCategory> searchMatches;
   final Map<String, _ResolvedImpactCategory> preferredAliasByNeedle;
   final Map<String, List<_ResolvedImpactCategory>> aliasMatchesByNeedle;
+  int? simplexChangeListCount;
+  bool formulaToolUsed;
+  int formulaResultCount;
+  bool formulaResultsAllSuccessful;
+  final List<String> formulaResultIds;
+  final List<double> formulaOutputValues;
 
   _OptimizationToolMemory()
       : searchMatches = <_ResolvedImpactCategory>[],
         preferredAliasByNeedle = <String, _ResolvedImpactCategory>{},
-        aliasMatchesByNeedle = <String, List<_ResolvedImpactCategory>>{};
+        aliasMatchesByNeedle = <String, List<_ResolvedImpactCategory>>{},
+        formulaToolUsed = false,
+        formulaResultCount = 0,
+        formulaResultsAllSuccessful = true,
+        formulaResultIds = <String>[],
+        formulaOutputValues = <double>[];
 
   bool get isEmpty =>
       searchMatches.isEmpty &&
       preferredAliasByNeedle.isEmpty &&
-      aliasMatchesByNeedle.isEmpty;
+      aliasMatchesByNeedle.isEmpty &&
+      simplexChangeListCount == null &&
+      !formulaToolUsed &&
+      formulaOutputValues.isEmpty;
 }
 
 void _recordToolResult({
@@ -23,6 +37,44 @@ void _recordToolResult({
   required Map<String, dynamic> toolReturn,
   required _OptimizationToolMemory toolMemory,
 }) {
+  if (name == 'simplexLatticeDesign') {
+    final changeLists = toolReturn['changeLists'];
+    if (changeLists is List) {
+      toolMemory.simplexChangeListCount = changeLists.length;
+    }
+    return;
+  }
+
+  if (name == 'formulaCalculator') {
+    toolMemory.formulaToolUsed = true;
+    final results = toolReturn['results'];
+    if (results is! List) {
+      toolMemory.formulaResultsAllSuccessful = false;
+      return;
+    }
+    toolMemory.formulaResultCount += results.length;
+    for (final item in results) {
+      if (item is! Map) {
+        toolMemory.formulaResultsAllSuccessful = false;
+        continue;
+      }
+      final result = item.cast<String, dynamic>();
+      final id = (result['id'] ?? '').toString().trim();
+      if (id.isNotEmpty) toolMemory.formulaResultIds.add(id);
+      if (result['success'] != true) {
+        toolMemory.formulaResultsAllSuccessful = false;
+      }
+      final outputs = result['outputs'];
+      if (outputs is Map) {
+        for (final value in outputs.values) {
+          final number = controller._toFiniteDouble(value);
+          if (number != null) toolMemory.formulaOutputValues.add(number);
+        }
+      }
+    }
+    return;
+  }
+
   if (name != 'searchOpenLcaIndicators') return;
 
   final records = <Map<String, dynamic>>[];

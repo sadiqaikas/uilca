@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 import 'openlca_calculation_target_selector.dart';
 import 'pdf_download.dart';
+import 'repro_bundle_helper.dart';
 import 'uncertainty_report_exporter.dart';
 
 class UncertaintyPropagationPage extends StatefulWidget {
@@ -52,6 +53,7 @@ class _UncertaintyPropagationPageState
   bool _isStarting = false;
   bool _isExportingCsv = false;
   bool _isExportingPdf = false;
+  bool _isExportingBundle = false;
 
   @override
   void initState() {
@@ -456,6 +458,83 @@ class _UncertaintyPropagationPageState
     }
   }
 
+  Future<void> _exportBundle() async {
+    final status = (_job?['status'] ?? '').toString().trim();
+    if (_job == null || _activePayload == null || _isExportingBundle) {
+      return;
+    }
+    setState(() => _isExportingBundle = true);
+    try {
+      final files = <String, Uint8List>{
+        'inputs/payload.json': ReproBundleHelper.jsonBytes(_activePayload!),
+        'inputs/user_prompt.txt': ReproBundleHelper.utf8Bytes(
+          '${widget.userPrompt ?? ''}\n',
+        ),
+        'outputs/job.json': ReproBundleHelper.jsonBytes(_job!),
+        'outputs/result.json': ReproBundleHelper.jsonBytes(
+          _result() ?? const <String, dynamic>{},
+        ),
+        'outputs/execution_events.json': ReproBundleHelper.jsonBytes(
+          _executionEvents(),
+        ),
+        'outputs/execution_events.csv': ReproBundleHelper.utf8Bytes(
+          _buildEventsCsv(),
+        ),
+      };
+      final rows = _sampleMatrix();
+      if (rows.isNotEmpty) {
+        files['outputs/uncertainty_propagation_results.csv'] =
+            ReproBundleHelper.utf8Bytes(_buildCsv(rows));
+        files['outputs/sample_matrix.json'] = ReproBundleHelper.jsonBytes(rows);
+      }
+      if (status == 'completed') {
+        final pdfBytes = await UncertaintyReportExporter.buildPdf(
+          job: _job!,
+          payload: _activePayload!,
+          userPrompt: widget.userPrompt ?? '',
+          generatedAt: DateTime.now(),
+        );
+        files['uncertainty_propagation_report.pdf'] = pdfBytes;
+      }
+      final bundleBytes = ReproBundleHelper.buildBundle(
+        schemaVersion: 'earlylca.uncertainty-bundle.v1',
+        readme: _bundleReadme(),
+        summary: {
+          'job_id': _jobId,
+          'status': status,
+          'sample_count': rows.length,
+          'product_system': widget.openLcaProductSystem,
+          'selected_calculation_target': _selectedCalculationTarget,
+          'impact_categories':
+              (_activePayload?['impact_categories'] as List?) ?? const [],
+        },
+        files: files,
+      );
+      await downloadFile(
+        bytes: bundleBytes,
+        filename: 'uncertainty_propagation_reproducibility_bundle.zip',
+        mimeType: 'application/zip',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Uncertainty bundle exported as uncertainty_propagation_reproducibility_bundle.zip',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Uncertainty bundle export failed: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isExportingBundle = false);
+      }
+    }
+  }
+
   String _buildCsv(List<Map<String, dynamic>> rows) {
     final parameterColumns = <String>[];
     final impactColumns = <String>[];
@@ -523,6 +602,32 @@ class _UncertaintyPropagationPageState
 
     return '${lines.join('\n')}\n';
   }
+
+  String _buildEventsCsv() {
+    final rows = <List<String>>[
+      const ['timestamp', 'stage', 'message', 'source', 'details_json'],
+    ];
+    for (final event in _executionEvents()) {
+      rows.add([
+        _formatEventTime(event['timestamp']),
+        (event['stage'] ?? '').toString(),
+        (event['message'] ?? '').toString(),
+        (event['source'] ?? '').toString(),
+        event['details'] is Map
+            ? jsonEncode(ReproBundleHelper.stableJsonValue(event['details']))
+            : '',
+      ]);
+    }
+    return ReproBundleHelper.csv(rows);
+  }
+
+  String _bundleReadme() => '''
+# Uncertainty Propagation Reproducibility Bundle
+
+This archive contains the uncertainty propagation report plus the submitted
+payload, raw backend job/result JSON, execution events, sample matrix CSV/JSON,
+checksums, and supporting metadata for reviewer audit.
+''';
 
   String _parameterLabel(Map<String, dynamic> parameter) {
     final scope = (parameter['scope'] ?? '').toString().trim();
@@ -851,9 +956,9 @@ class _UncertaintyPropagationPageState
             Expanded(
               child: FilledButton.icon(
                 onPressed:
-                    !canExportArtifacts || _isExportingPdf ? null : _exportPdf,
-                icon: const Icon(Icons.picture_as_pdf_outlined),
-                label: Text(_isExportingPdf ? 'Exporting...' : 'Export PDF'),
+                    !canExportArtifacts || _isExportingBundle ? null : _exportBundle,
+                icon: const Icon(Icons.folder_zip_outlined),
+                label: Text(_isExportingBundle ? 'Exporting...' : 'Export Bundle'),
               ),
             ),
           ],
