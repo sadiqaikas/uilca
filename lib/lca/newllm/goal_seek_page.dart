@@ -11,6 +11,7 @@ import 'goal_seek_report_exporter.dart';
 import 'openlca_calculation_target_selector.dart';
 import 'pdf_download.dart';
 import 'repro_bundle_helper.dart';
+import 'repro_run_ledger.dart';
 
 class GoalSeekPage extends StatefulWidget {
   final List<ProcessNode> processes;
@@ -73,6 +74,9 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
   bool _showSetupEditor = false;
   String? _impactError;
   String? _jobId;
+  String? _ledgerRunUid;
+  int? _ledgerSnapshotAnchorId;
+  bool _ledgerRecordedForCurrentRun = false;
   Timer? _pollTimer;
   Map<String, dynamic>? _job;
   Map<String, dynamic>? _activePayload;
@@ -287,6 +291,62 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
   String _sourceProviderLabel() {
     final value = (widget.sourceProviderLabel ?? '').toString().trim();
     return value.isEmpty ? '' : value;
+  }
+
+  String _ledgerModelName() {
+    final value = _sourceModelName();
+    return value.isEmpty ? 'manual' : value;
+  }
+
+  String _goalSeekPromptForLedger() {
+    final payloadPrompt = (_activePayload?['prompt'] ?? '').toString();
+    if (payloadPrompt.trim().isNotEmpty) return payloadPrompt;
+    return (widget.userPrompt ?? '').toString();
+  }
+
+  String _ledgerStatusForJob(String rawStatus) {
+    switch (rawStatus.trim()) {
+      case 'completed':
+        return 'success';
+      case 'failed':
+        return 'failure';
+      default:
+        final trimmed = rawStatus.trim();
+        return trimmed.isEmpty ? 'unknown' : trimmed;
+    }
+  }
+
+  Future<void> _recordGoalSeekLedgerRun(String status) async {
+    if (_ledgerRecordedForCurrentRun) return;
+    final runUid = (_ledgerRunUid ?? '').trim();
+    if (runUid.isEmpty) return;
+    try {
+      final ledgerId = await ReproRunLedger.registerRun(
+        bundleName: 'optimisation',
+        modelName: _ledgerModelName(),
+        promptHash: ReproRunLedger.promptHash(_goalSeekPromptForLedger()),
+        status: _ledgerStatusForJob(status),
+        runUid: runUid,
+        providerLabel:
+            _sourceProviderLabel().isEmpty ? null : _sourceProviderLabel(),
+        createdAt: DateTime.now().toUtc().toIso8601String(),
+        metadata: {
+          if ((_jobId ?? '').trim().isNotEmpty) 'job_id': _jobId,
+        },
+      );
+      _ledgerSnapshotAnchorId = ledgerId;
+      _ledgerRecordedForCurrentRun = true;
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Optimisation run finished, but the sequential ledger could not be updated: $e',
+          ),
+          duration: const Duration(seconds: 8),
+        ),
+      );
+    }
   }
 
   Map<String, dynamic> _runMetadata() {
@@ -895,6 +955,15 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
     if (selectedPayload == null) return;
     final normalizedPayload = _normalizeGoalSeekPayload(selectedPayload);
     _applyPayloadToSetup(normalizedPayload);
+    _ledgerRunUid = ReproRunLedger.newRunUid(
+      bundleName: 'optimisation',
+      modelName: _ledgerModelName(),
+      promptHash: ReproRunLedger.promptHash(
+        (normalizedPayload['prompt'] ?? widget.userPrompt ?? '').toString(),
+      ),
+    );
+    _ledgerSnapshotAnchorId = null;
+    _ledgerRecordedForCurrentRun = false;
     _pollTimer?.cancel();
     _pollTimer = null;
     setState(() {
@@ -953,6 +1022,7 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
         'Failed to start optimization.',
         details: {'error': e.toString()},
       );
+      await _recordGoalSeekLedgerRun('failed');
       _showSnack('Goal seek failed to start: $e');
     } finally {
       if (mounted) setState(() => _isStarting = false);
@@ -980,6 +1050,7 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
       if (status == 'completed' || status == 'failed' || status == 'cancelled') {
         _pollTimer?.cancel();
         _pollTimer = null;
+        await _recordGoalSeekLedgerRun(status);
       }
     } catch (e) {
       if (_jobId != jobId) return;
@@ -988,6 +1059,7 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
         'Polling the optimizer job failed.',
         details: {'error': e.toString()},
       );
+      await _recordGoalSeekLedgerRun('poll_error');
       _showSnack('Goal seek polling error: $e');
       _pollTimer?.cancel();
       _pollTimer = null;
@@ -1135,10 +1207,25 @@ class _GoalSeekPageState extends State<GoalSeekPage> {
     if (_job == null || _isExportingBundle) return;
     setState(() => _isExportingBundle = true);
     try {
+      final snapshotAnchorId = _ledgerSnapshotAnchorId;
+      if (snapshotAnchorId == null) {
+        throw Exception(
+          'No sequential ledger anchor was recorded for this optimisation run.',
+        );
+      }
+      final ledgerArtifacts =
+          await ReproRunLedger.fetchBundleArtifacts(
+            'optimisation',
+            upToLedgerId: snapshotAnchorId,
+          );
       final pdfBytes = await _buildPdf();
       final csvText = _buildCsv();
       final files = <String, Uint8List>{
         'goal_seek_report.pdf': pdfBytes,
+        'ledger/Sequential_snapshot.csv': ReproBundleHelper.utf8Bytes(
+          ledgerArtifacts.snapshotCsv,
+        ),
+        'ledger/run_ledger.sqlite': ledgerArtifacts.sqliteBytes,
         'outputs/goal_seek_results.csv': ReproBundleHelper.utf8Bytes(csvText),
         'inputs/request_payload.json': ReproBundleHelper.jsonBytes(
           _activePayload ?? const <String, dynamic>{},

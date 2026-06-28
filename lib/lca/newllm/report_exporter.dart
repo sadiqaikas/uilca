@@ -339,6 +339,7 @@ class ReportExporter {
     required String? impactMethodName,
     required Map<String, dynamic>? productSystem,
     required Map<String, dynamic>? impactMethod,
+    Map<String, Uint8List> extraFiles = const {},
     DateTime? generatedAt,
   }) {
     final createdAt = generatedAt ?? DateTime.now();
@@ -389,6 +390,7 @@ class ReportExporter {
       'documents/extraction_provenance.csv': _utf8Bytes(
         _documentProvenanceCsv(documentProvenance),
       ),
+      ...extraFiles,
     };
     files.addAll(_modelDiagnosticFiles(generationByModel));
 

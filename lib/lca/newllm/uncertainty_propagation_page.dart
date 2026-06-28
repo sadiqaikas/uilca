@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'openlca_calculation_target_selector.dart';
 import 'pdf_download.dart';
 import 'repro_bundle_helper.dart';
+import 'repro_run_ledger.dart';
 import 'uncertainty_report_exporter.dart';
 
 class UncertaintyPropagationPage extends StatefulWidget {
@@ -16,6 +17,8 @@ class UncertaintyPropagationPage extends StatefulWidget {
   final Map<String, dynamic>? initialCalculationTarget;
   final String? userPrompt;
   final Map<String, dynamic>? initialPayload;
+  final String? sourceModelName;
+  final String? sourceProviderLabel;
   final bool autoStart;
 
   const UncertaintyPropagationPage({
@@ -24,6 +27,8 @@ class UncertaintyPropagationPage extends StatefulWidget {
     this.initialCalculationTarget,
     this.userPrompt,
     this.initialPayload,
+    this.sourceModelName,
+    this.sourceProviderLabel,
     this.autoStart = false,
   });
 
@@ -54,6 +59,9 @@ class _UncertaintyPropagationPageState
   bool _isExportingCsv = false;
   bool _isExportingPdf = false;
   bool _isExportingBundle = false;
+  String? _ledgerRunUid;
+  int? _ledgerSnapshotAnchorId;
+  bool _ledgerRecordedForCurrentRun = false;
 
   @override
   void initState() {
@@ -104,6 +112,62 @@ class _UncertaintyPropagationPageState
         : Map<String, dynamic>.from(decoded as Map);
   }
 
+  String _sourceModelName() {
+    final value = (widget.sourceModelName ?? '').toString().trim();
+    return value.isEmpty ? 'manual' : value;
+  }
+
+  String _sourceProviderLabel() {
+    final value = (widget.sourceProviderLabel ?? '').toString().trim();
+    return value;
+  }
+
+  String _ledgerStatusForJob(String rawStatus) {
+    switch (rawStatus.trim()) {
+      case 'completed':
+        return 'success';
+      case 'failed':
+        return 'failure';
+      default:
+        final trimmed = rawStatus.trim();
+        return trimmed.isEmpty ? 'unknown' : trimmed;
+    }
+  }
+
+  Future<void> _recordUncertaintyLedgerRun(String status) async {
+    if (_ledgerRecordedForCurrentRun) return;
+    final runUid = (_ledgerRunUid ?? '').trim();
+    if (runUid.isEmpty) return;
+    try {
+      final ledgerId = await ReproRunLedger.registerRun(
+        bundleName: 'uncertainty',
+        modelName: _sourceModelName(),
+        promptHash: ReproRunLedger.promptHash(widget.userPrompt ?? ''),
+        status: _ledgerStatusForJob(status),
+        runUid: runUid,
+        providerLabel: _sourceProviderLabel().isEmpty
+            ? null
+            : _sourceProviderLabel(),
+        createdAt: DateTime.now().toUtc().toIso8601String(),
+        metadata: {
+          if ((_jobId ?? '').trim().isNotEmpty) 'job_id': _jobId,
+        },
+      );
+      _ledgerSnapshotAnchorId = ledgerId;
+      _ledgerRecordedForCurrentRun = true;
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Uncertainty run finished, but the sequential ledger could not be updated: $e',
+          ),
+          duration: const Duration(seconds: 8),
+        ),
+      );
+    }
+  }
+
   void _appendClientEvent(
     String stage,
     String message, {
@@ -122,6 +186,13 @@ class _UncertaintyPropagationPageState
     final selectedPayload = await _withSelectedCalculationTarget(payload);
     if (selectedPayload == null) return;
     final normalizedPayload = _deepCopyMap(selectedPayload);
+    _ledgerRunUid = ReproRunLedger.newRunUid(
+      bundleName: 'uncertainty',
+      modelName: _sourceModelName(),
+      promptHash: ReproRunLedger.promptHash(widget.userPrompt ?? ''),
+    );
+    _ledgerSnapshotAnchorId = null;
+    _ledgerRecordedForCurrentRun = false;
     setState(() {
       _isStarting = true;
       _job = null;
@@ -184,6 +255,7 @@ class _UncertaintyPropagationPageState
         'Failed to start uncertainty propagation.',
         details: {'error': e.toString()},
       );
+      await _recordUncertaintyLedgerRun('failed');
       _showSnack('Uncertainty propagation failed to start: $e');
     } finally {
       if (mounted) {
@@ -214,6 +286,8 @@ class _UncertaintyPropagationPageState
       final status = (decoded['status'] ?? '').toString().trim();
       if (status == 'completed' || status == 'failed' || status == 'cancelled') {
         _pollTimer?.cancel();
+        _pollTimer = null;
+        await _recordUncertaintyLedgerRun(status);
       }
     } catch (e) {
       _appendClientEvent(
@@ -221,8 +295,10 @@ class _UncertaintyPropagationPageState
         'Polling the uncertainty job failed.',
         details: {'error': e.toString()},
       );
+      await _recordUncertaintyLedgerRun('poll_error');
       _showSnack('Uncertainty propagation polling error: $e');
       _pollTimer?.cancel();
+      _pollTimer = null;
     }
   }
 
@@ -465,11 +541,26 @@ class _UncertaintyPropagationPageState
     }
     setState(() => _isExportingBundle = true);
     try {
+      final snapshotAnchorId = _ledgerSnapshotAnchorId;
+      if (snapshotAnchorId == null) {
+        throw Exception(
+          'No sequential ledger anchor was recorded for this uncertainty run.',
+        );
+      }
+      final ledgerArtifacts =
+          await ReproRunLedger.fetchBundleArtifacts(
+            'uncertainty',
+            upToLedgerId: snapshotAnchorId,
+          );
       final files = <String, Uint8List>{
         'inputs/payload.json': ReproBundleHelper.jsonBytes(_activePayload!),
         'inputs/user_prompt.txt': ReproBundleHelper.utf8Bytes(
           '${widget.userPrompt ?? ''}\n',
         ),
+        'ledger/Sequential_snapshot.csv': ReproBundleHelper.utf8Bytes(
+          ledgerArtifacts.snapshotCsv,
+        ),
+        'ledger/run_ledger.sqlite': ledgerArtifacts.sqliteBytes,
         'outputs/job.json': ReproBundleHelper.jsonBytes(_job!),
         'outputs/result.json': ReproBundleHelper.jsonBytes(
           _result() ?? const <String, dynamic>{},

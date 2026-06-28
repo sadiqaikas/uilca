@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from optimizer_backend import register_goal_seek_routes
+from reproducibility_ledger import register_reproducibility_ledger_routes
 from uncertainty_backend import register_uncertainty_routes
 
 try:
@@ -2406,3 +2407,5 @@ register_uncertainty_routes(
         "default_impact_method_name": DEFAULT_IMPACT_METHOD_NAME,
     },
 )
+
+register_reproducibility_ledger_routes(app)

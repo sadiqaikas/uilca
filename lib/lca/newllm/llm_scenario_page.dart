@@ -17,6 +17,7 @@ import 'llm_scenario_controller.dart';
 import 'openlca_calculation_target_selector.dart';
 import 'pdf_download.dart';
 import 'report_exporter.dart';
+import 'repro_run_ledger.dart';
 import 'scenario_graph_view.dart';
 import 'uncertainty_propagation_page.dart';
 
@@ -146,6 +147,9 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
   bool _isOpenWeightMegaRun = false;
   bool _formulaCalculatorEnabled = false;
   int _generationRunSeq = 0;
+  int? _normalLedgerSnapshotAnchorId;
+  bool _normalLedgerRegistrationFailed = false;
+  String? _normalLedgerRegistrationError;
   Set<String> _selectedModels = const {};
   String _generationRouteLabel = 'GPT-5';
 
@@ -707,6 +711,15 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
 
     final runId = ++_generationRunSeq;
     final runTimer = Stopwatch()..start();
+    final promptHash = ReproRunLedger.promptHash(widget.prompt);
+    final runUidBase = ReproRunLedger.newRunUid(
+      bundleName: 'normal',
+      modelName: selected.join(','),
+      promptHash: promptHash,
+    );
+    _normalLedgerSnapshotAnchorId = null;
+    _normalLedgerRegistrationFailed = false;
+    _normalLedgerRegistrationError = null;
     _debugLog('SEL[$runId] Run selected models pressed: ${selected.join(', ')}');
     _debugLog(
       'SEL[$runId] Formula calculator enabled=$_formulaCalculatorEnabled',
@@ -878,6 +891,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     if (mergedAll.isEmpty) {
       final handledNonScenario = await _maybeOpenSingleNonScenarioResult(
         logPrefix: 'SEL[$runId]',
+        runUidBase: runUidBase,
         results: nonScenarioResults,
         generationByModel: generationByModel,
         functionsUsed: functionsUsed,
@@ -936,6 +950,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
                     'At least one selected model must return a supported scenario delta response.',
               );
       });
+      await _recordNormalGenerationStatuses(
+        runUidBase: runUidBase,
+        generationByModel: generationByModel,
+      );
       return;
     }
 
@@ -963,11 +981,24 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       'SEL[$runId] Finished. totalElapsedMs=${runTimer.elapsedMilliseconds} '
       'scenarioCount=${mergedAll.length} modelsSelected=${selected.length}',
     );
+    await _recordNormalGenerationStatuses(
+      runUidBase: runUidBase,
+      generationByModel: generationByModel,
+    );
   }
 
   Future<void> _onGeneratePressed() async {
     final runId = ++_generationRunSeq;
     final runTimer = Stopwatch()..start();
+    final promptHash = ReproRunLedger.promptHash(widget.prompt);
+    final runUidBase = ReproRunLedger.newRunUid(
+      bundleName: 'normal',
+      modelName: _gpt5ModelName,
+      promptHash: promptHash,
+    );
+    _normalLedgerSnapshotAnchorId = null;
+    _normalLedgerRegistrationFailed = false;
+    _normalLedgerRegistrationError = null;
     _debugLog('GEN[$runId] Generate GPT-5 scenarios pressed');
     _debugLog(
       'GEN[$runId] Formula calculator enabled=$_formulaCalculatorEnabled',
@@ -1071,6 +1102,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
             duration: const Duration(seconds: 7),
           ),
         );
+        await _recordNormalGenerationStatuses(
+          runUidBase: runUidBase,
+          generationByModel: _generationByModel,
+        );
         return;
       }
 
@@ -1094,6 +1129,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           _isOpenWeightMegaRun = false;
           _generationRouteLabel = 'GPT-5';
         });
+        await _recordNormalGenerationStatuses(
+          runUidBase: runUidBase,
+          generationByModel: _generationByModel,
+        );
         await _openGeneratedGoalSeek(
           result.optimizationPayload!,
           sourceModelName: _gpt5ModelName,
@@ -1125,7 +1164,15 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           _isOpenWeightMegaRun = false;
           _generationRouteLabel = 'GPT-5';
         });
-        await _openGeneratedUncertaintyPropagation(result.uncertaintyPayload!);
+        await _recordNormalGenerationStatuses(
+          runUidBase: runUidBase,
+          generationByModel: _generationByModel,
+        );
+        await _openGeneratedUncertaintyPropagation(
+          result.uncertaintyPayload!,
+          sourceModelName: _gpt5ModelName,
+          sourceProviderLabel: 'OpenAI',
+        );
         return;
       }
 
@@ -1165,6 +1212,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           ),
         );
       }
+      await _recordNormalGenerationStatuses(
+        runUidBase: runUidBase,
+        generationByModel: _generationByModel,
+      );
     } catch (e, st) {
       _debugLog(
         'GEN[$runId] Failed after ${runTimer.elapsedMilliseconds}ms: $e',
@@ -1189,6 +1240,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Scenario generation failed: $e')),
       );
+      await _recordNormalGenerationStatuses(
+        runUidBase: runUidBase,
+        generationByModel: _generationByModel,
+      );
     } finally {
       if (mounted) setState(() => _isLoading = false);
       _debugLog(
@@ -1209,6 +1264,71 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
 
   String _providerLabelForModel(String modelName) {
     return modelName.trim() == _gpt5ModelName ? 'OpenAI' : 'Together AI';
+  }
+
+  String _normalLedgerStatus(String rawStatus) {
+    switch (rawStatus.trim()) {
+      case 'optimization':
+        return 'optimization_payload';
+      case 'uncertainty_propagation':
+        return 'uncertainty_payload';
+      default:
+        final trimmed = rawStatus.trim();
+        return trimmed.isEmpty ? 'unknown' : trimmed;
+    }
+  }
+
+  Future<void> _recordNormalGenerationStatuses({
+    required String runUidBase,
+    required Map<String, Map<String, dynamic>> generationByModel,
+  }) async {
+    if (generationByModel.isEmpty) return;
+    final promptHash = ReproRunLedger.promptHash(widget.prompt);
+    final createdAt = DateTime.now().toUtc().toIso8601String();
+    Object? firstError;
+    var maxLedgerId = _normalLedgerSnapshotAnchorId ?? 0;
+    for (final entry in generationByModel.entries) {
+      final modelName = entry.key.trim();
+      if (modelName.isEmpty) continue;
+      try {
+        final ledgerId = await ReproRunLedger.registerRun(
+          bundleName: 'normal',
+          modelName: modelName,
+          promptHash: promptHash,
+          status: _normalLedgerStatus(
+            (entry.value['status'] ?? '').toString(),
+          ),
+          runUid: generationByModel.length == 1
+              ? runUidBase
+              : '$runUidBase::$modelName',
+          providerLabel: _providerLabelForModel(modelName),
+          createdAt: createdAt,
+        );
+        if (ledgerId > maxLedgerId) {
+          maxLedgerId = ledgerId;
+        }
+      } catch (error) {
+        firstError ??= error;
+        _debugLog(
+          'Ledger registration failed for model="$modelName": $error',
+        );
+      }
+    }
+    _normalLedgerSnapshotAnchorId =
+        maxLedgerId > 0 ? maxLedgerId : _normalLedgerSnapshotAnchorId;
+    _normalLedgerRegistrationFailed = firstError != null;
+    _normalLedgerRegistrationError = firstError?.toString();
+    if (firstError != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Run finished, but the sequential ledger could not be updated: '
+            '$firstError',
+          ),
+          duration: const Duration(seconds: 8),
+        ),
+      );
+    }
   }
 
   String _toScopedScenarioName(String model, String scenarioName) {
@@ -1254,6 +1374,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
 
   Future<bool> _maybeOpenSingleNonScenarioResult({
     required String logPrefix,
+    required String runUidBase,
     required List<_NonScenarioModelPayload> results,
     required Map<String, Map<String, dynamic>> generationByModel,
     required Set<String> functionsUsed,
@@ -1285,6 +1406,11 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       _generationRouteLabel = routeLabel;
     });
 
+    await _recordNormalGenerationStatuses(
+      runUidBase: runUidBase,
+      generationByModel: generationByModel,
+    );
+
     if (result.isOptimization) {
       await _openGeneratedGoalSeek(
         result.payload,
@@ -1292,7 +1418,11 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
         sourceProviderLabel: _providerLabelForModel(result.modelName),
       );
     } else {
-      await _openGeneratedUncertaintyPropagation(result.payload);
+      await _openGeneratedUncertaintyPropagation(
+        result.payload,
+        sourceModelName: result.modelName,
+        sourceProviderLabel: _providerLabelForModel(result.modelName),
+      );
     }
     return true;
   }
@@ -1300,6 +1430,15 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
   Future<void> _onGenerateOpenWeightsPressed() async {
     final runId = ++_generationRunSeq;
     final runTimer = Stopwatch()..start();
+    final promptHash = ReproRunLedger.promptHash(widget.prompt);
+    final runUidBase = ReproRunLedger.newRunUid(
+      bundleName: 'normal',
+      modelName: 'open-weight-mega-run',
+      promptHash: promptHash,
+    );
+    _normalLedgerSnapshotAnchorId = null;
+    _normalLedgerRegistrationFailed = false;
+    _normalLedgerRegistrationError = null;
     _debugLog('OW[$runId] Run open-weight models pressed');
     _debugLog(
       'OW[$runId] Formula calculator enabled=$_formulaCalculatorEnabled',
@@ -1494,6 +1633,7 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     if (mergedAll.isEmpty) {
       final handledNonScenario = await _maybeOpenSingleNonScenarioResult(
         logPrefix: 'OW[$runId]',
+        runUidBase: runUidBase,
         results: nonScenarioResults,
         generationByModel: generationByModel,
         functionsUsed: functionsUsed,
@@ -1561,6 +1701,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           duration: Duration(seconds: 8),
         ),
       );
+      await _recordNormalGenerationStatuses(
+        runUidBase: runUidBase,
+        generationByModel: generationByModel,
+      );
       return;
     }
 
@@ -1605,6 +1749,11 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
         content: Text(noteParts.join(' ')),
         duration: const Duration(seconds: 8),
       ),
+    );
+
+    await _recordNormalGenerationStatuses(
+      runUidBase: runUidBase,
+      generationByModel: generationByModel,
     );
 
     _debugLog(
@@ -1997,8 +2146,10 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
   }
 
   Future<void> _openGeneratedUncertaintyPropagation(
-    Map<String, dynamic> payload,
-  ) async {
+    Map<String, dynamic> payload, {
+    String? sourceModelName,
+    String? sourceProviderLabel,
+  }) async {
     if (!mounted) return;
     final productId = (payload['product_system_id'] ?? '').toString().trim();
     final selectedProduct =
@@ -2026,6 +2177,8 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
           initialCalculationTarget: _selectedOpenLcaCalculationTarget,
           userPrompt: widget.prompt,
           initialPayload: payload,
+          sourceModelName: sourceModelName,
+          sourceProviderLabel: sourceProviderLabel,
           autoStart: true,
         ),
       ),
@@ -2247,6 +2400,24 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
     String? reportFilename,
     String? zipFilename,
   }) async {
+    if (_normalLedgerRegistrationFailed) {
+      throw Exception(
+        _normalLedgerRegistrationError ??
+            'This normal run has an incomplete sequential ledger record. '
+                'Re-run or wait for the ledger backend before exporting the bundle.',
+      );
+    }
+    final snapshotAnchorId = _normalLedgerSnapshotAnchorId;
+    if (snapshotAnchorId == null) {
+      throw Exception(
+        'No sequential ledger anchor was recorded for this normal run.',
+      );
+    }
+    final ledgerArtifacts =
+        await ReproRunLedger.fetchBundleArtifacts(
+          'normal',
+          upToLedgerId: snapshotAnchorId,
+        );
     final reportName = reportFilename ??
         (_isOpenWeightMegaRun
             ? 'lca_results_multi_model_report.pdf'
@@ -2281,6 +2452,12 @@ class _LLMScenarioPageState extends State<LLMScenarioPage> {
       impactMethodName: impactMethodName,
       productSystem: _selectedOpenLcaProductSystem,
       impactMethod: _selectedOpenLcaImpactMethod,
+      extraFiles: {
+        'ledger/Sequential_snapshot.csv': Uint8List.fromList(
+          utf8.encode(ledgerArtifacts.snapshotCsv),
+        ),
+        'ledger/run_ledger.sqlite': ledgerArtifacts.sqliteBytes,
+      },
     );
     final zipName = zipFilename ??
         (_isOpenWeightMegaRun
